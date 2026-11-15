@@ -10,15 +10,18 @@ that test database and fails the run when it finds a structural problem:
 - `integer` primary keys and sequences that will run out,
 - foreign keys whose column type differs from the column they reference,
 - multi-column unique constraints that NULLs slip through,
-- constraints added `NOT VALID` and never validated.
+- constraints added `NOT VALID` and never validated,
+- `json` columns that should be `jsonb`, and unlogged tables.
 
 Every finding names the table and the object, says why it matters, and gives
 the SQL that fixes it. No extension to install, no production statistics, no
-running database beyond the one your tests use.
+running database beyond the one your tests use. Tables that belong to
+Django, Alembic and other packages are skipped. The same checks run against
+staging or a production snapshot with the read-only `pghealth` command.
 
 ```text
 =================================== pghealth ===================================
-PostgreSQL 18.1, all user schemas: 11 checks, 3 problems (fixture engine)
+PostgreSQL 18.1, all user schemas: 13 checks, 3 problems (fixture engine)
 
 foreign_key_without_index: public.order_items.order_items_order_id_fkey
   Foreign key order_items_order_id_fkey (order_id) has no index: every delete or key update in orders scans public.order_items, and joins on these columns cannot use an index.
@@ -126,7 +129,7 @@ line, so a CI job that asks for the check cannot pass without it; enabled in
 database just says so.
 
 `pytest --pghealth-list-checks` lists the checks and which of them run with
-your configuration.
+your configuration, and every active ignore with the file it comes from.
 
 ### From any code
 
@@ -136,6 +139,25 @@ from pytest_pghealth import run_checks
 report = run_checks("postgresql://localhost/app_test")
 print(report.format())
 ```
+
+### Against staging or a production snapshot
+
+Invalid indexes, sequences near their limit and tables left `UNLOGGED` show
+up in databases that have run for years, not in a fresh test database. The
+`pghealth` command runs the checks against any database, outside pytest:
+
+```bash
+pghealth "postgresql://pghealth@staging-db/app"                 # text report
+pghealth "$DSN" --format github --json pghealth.json            # GitHub annotations
+pghealth "$DSN" --format json                                   # the JSON report
+```
+
+It makes its session read-only before the first check and refuses to run
+if PostgreSQL does not confirm it; every check is a catalog `SELECT` with a
+statement and lock timeout, and fixes are printed, never run. It reads the
+ignores in `./pyproject.toml`. Exit status 0 healthy, 1 findings, 2 an
+error. Details, the privileges it needs, and a GitHub Actions example:
+[docs/cli.md](docs/cli.md).
 
 ## The checks
 
@@ -152,19 +174,27 @@ print(report.format())
 | `nullable_unique_column` | multi-column unique indexes and constraints with a nullable column (not `NULLS NOT DISTINCT`) | `SET NOT NULL` or `NULLS NOT DISTINCT` |
 | `not_valid_constraint` | `CHECK` and foreign key constraints added `NOT VALID` and never validated | `VALIDATE CONSTRAINT` |
 | `duplicate_foreign_key` | foreign keys identical to another one | `DROP CONSTRAINT` |
+| `json_column` | `json` columns, which cannot be compared, made unique or GIN-indexed | `ALTER COLUMN ... TYPE jsonb` |
+| `unlogged_table` | unlogged tables: emptied by a crash, never on a standby | `SET LOGGED` |
+| `timestamp_without_time_zone` (off by default) | `timestamp` without time zone and `timetz` columns | `ALTER COLUMN ... TYPE timestamptz` |
 | `btree_index_on_array` (off by default) | B-tree indexes on array columns, which cannot serve `@>`, `<@` or `&&` | a GIN index |
 
 [docs/checks.md](docs/checks.md) explains each check, what it skips and why.
 Objects that belong to extensions and PostgreSQL's own schemas are never
 reported.
 
+Tables that frameworks and packages create (`django.contrib`,
+django-taggit, Celery, Wagtail, Alembic's `alembic_version`, ...) are
+skipped by default, since their migrations are not yours to change;
+`invalid_index` and `sequence_near_overflow` still report them. The list
+and how to turn it off: [framework-owned tables](docs/configuration.md#framework-owned-tables).
+
 Django note: Django indexes foreign keys by itself, so
 `foreign_key_without_index` mostly catches `db_index=False` and raw SQL
 migrations there. What Django schemas do have is the reverse: a
 per-`ForeignKey` index next to a unique constraint that starts with the
 same column, which `overlapping_index` reports and names the foreign key
-(`db_index=False` removes it). Tables from `django.contrib` and other apps
-can be ignored by pattern; see [configuration](docs/configuration.md#ignores).
+(`db_index=False` removes it).
 
 ## On real projects
 
@@ -194,6 +224,7 @@ schemas = ["public", "billing"]     # default: every non-system schema
 disable = ["int4_primary_key"]      # or --pghealth-disable
 enable = ["btree_index_on_array"]   # or --pghealth-enable; "all" for every check
 sequence_remaining_percent = 10     # default 20
+ignore_framework_tables = true      # default; false, or a list of packages
 warn_only = false                   # report without failing (or --pghealth-warn)
 json = "pghealth.json"              # JSON report (or --pghealth-json)
 
@@ -216,13 +247,13 @@ its `format` key is versioned.
 | | pytest-pghealth | [pg-index-health](https://github.com/mfvanek/pg-index-health) | [pglinter](https://github.com/pmpetit/pglinter) | [squawk](https://github.com/sbdchd/squawk) |
 |---|---|---|---|---|
 | Language / runs in | Python, pytest | Java, JUnit / Spring Boot | PostgreSQL extension (Rust) | CLI (Rust) |
-| Looks at | the migrated test database | a live database | a live database | migration SQL files |
+| Looks at | the migrated test database, or any database with the `pghealth` command | a live database | a live database | migration SQL files |
 | Needs installed in the database | nothing | nothing | the extension | no database |
 | Works with the stock `postgres` image in CI | yes | yes | no | n/a |
-| Output | findings with fix SQL, text and JSON | Java objects for assertions; a generator of foreign key index migrations | SARIF | rule violations with advice |
+| Output | findings with fix SQL: text, JSON, GitHub annotations | Java objects for assertions; a generator of foreign key index migrations | SARIF | rule violations with advice |
 | Production statistics (bloat, unused indexes) | no, by design | yes | n/a | no |
 
-pg-index-health is the mature tool for this on the JVM, and nine of the
+pg-index-health is the mature tool for this on the JVM, and twelve of the
 queries here are ported from its SQL (see [Credits](#credits)). squawk lints
 the migration *statements* (locks, unsafe `ALTER`s) and complements this:
 squawk asks "is this migration safe to run?", pytest-pghealth asks "is the
@@ -258,8 +289,9 @@ foreign keys whatever the tests ran.
 
 The SQL of `foreign_key_without_index`, `duplicate_index`, `invalid_index`,
 `table_without_primary_key`, `sequence_near_overflow`,
-`foreign_key_type_mismatch`, `not_valid_constraint`, `duplicate_foreign_key`
-and `btree_index_on_array` is ported from
+`foreign_key_type_mismatch`, `not_valid_constraint`, `duplicate_foreign_key`,
+`json_column`, `unlogged_table`, `timestamp_without_time_zone` and
+`btree_index_on_array` is ported from
 [pg-index-health-sql](https://github.com/mfvanek/pg-index-health-sql) by
 Ivan Vakhrushev and others, under the Apache License 2.0. Each ported file
 keeps its copyright line and says what was changed; see [NOTICE](NOTICE) and

@@ -2,12 +2,17 @@
 
 Each check is one SQL query in `src/pytest_pghealth/sql/` and reads only the
 system catalog (`pg_class`, `pg_index`, `pg_constraint`, `pg_attribute`,
-`pg_sequence`, `pg_depend`). None of them reads table data or statistics, so
-they give the same answer on an empty test database as on production.
+`pg_sequence`, `pg_depend`), plus each sequence's current value for
+`sequence_near_overflow`. None of them reads table data or statistics, so
+the design checks give the same answer on an empty test database as on
+production.
 
 Every check skips PostgreSQL's own schemas (`pg_*`, `information_schema`)
 and objects that belong to an extension. `schemas` in `[tool.pghealth]`
-narrows them to the schemas you name.
+narrows them to the schemas you name. Findings on tables that a framework
+or another package creates (`django.contrib`, Alembic's `alembic_version`
+and [others](configuration.md#framework-owned-tables)) are ignored by
+default.
 
 A finding's *target* is `schema.table` or `schema.table.object`; ignores
 match it (see [configuration](configuration.md#ignores)).
@@ -179,6 +184,58 @@ insert and update. The first by name is kept; the others are reported.
 
 **Fix:** `ALTER TABLE <table> DROP CONSTRAINT <constraint>;`
 
+## json_column
+
+**Finds** columns of type `json`, in tables and partitioned tables (a
+partition's column is reported once, on the parent).
+
+**Why.** `json` stores the text as written and parses it on every access.
+It has no equality operator, so a `json` column cannot be compared, used in
+`DISTINCT`, `GROUP BY` or `UNION`, or put in a unique constraint, and it
+has no GIN operator class for `@>` and `?`. `jsonb` has none of these
+limits. The one thing `json` keeps that `jsonb` does not is the exact input:
+key order, duplicate keys and whitespace. If you need that, ignore the
+finding with that reason.
+
+**Fix:** `ALTER TABLE <table> ALTER COLUMN <column> TYPE jsonb USING <column>::jsonb;`
+(rewrites the table under an exclusive lock).
+
+## unlogged_table
+
+**Finds** unlogged tables, partitions included.
+
+**Why.** An unlogged table is not written to the WAL. After a crash or an
+immediate shutdown PostgreSQL empties it, and standbys, backups restored
+by WAL replay and point-in-time recovery never have its rows. That is a fine
+trade for a cache or a staging area that can be rebuilt, and a surprise
+anywhere else; a table created `UNLOGGED` to speed up a bulk load and never
+switched back is the usual case.
+
+**Fix:** `ALTER TABLE <table> SET LOGGED;` (rewrites the table into the WAL
+under an exclusive lock). For a deliberate cache, ignore it with that
+reason.
+
+## timestamp_without_time_zone (off by default)
+
+**Finds** columns of type `timestamp` (without time zone) and `timetz`.
+Off by default: SQLAlchemy's `DateTime` creates `timestamp` unless
+`timezone=True`, so an existing SQLAlchemy schema may have many of them,
+and a local wall-clock time (an alarm at 07:00 wherever the user is) is a
+legitimate use. Turn it on with `enable = ["timestamp_without_time_zone"]`.
+
+**Why.** A `timestamp` value does not say which time zone it is in: its
+meaning depends on the `TimeZone` of the session that wrote it, and the
+hour around each daylight saving change is ambiguous. `timestamptz` stores
+a point in time. `timetz` pairs a time of day with a fixed offset, which
+cannot follow daylight saving time. Both are on PostgreSQL's
+["Don't Do This"](https://wiki.postgresql.org/wiki/Don't_Do_This) list.
+
+**Fix:** for `timestamp`,
+`ALTER TABLE <table> ALTER COLUMN <column> TYPE timestamptz USING <column> AT TIME ZONE 'UTC';`
+when the stored values are UTC (name their real zone otherwise); for
+`timetz`, `TYPE time` keeps the local time and drops the offset. The
+precision of the column is kept.
+
 ## btree_index_on_array (off by default)
 
 **Finds** B-tree indexes with an array column among their key columns. A
@@ -193,7 +250,7 @@ A multi-column or constraint index is kept: the fix only adds the GIN index.
 
 ## Origin of the queries
 
-Nine queries are ported from
+Twelve queries are ported from
 [pg-index-health-sql](https://github.com/mfvanek/pg-index-health-sql)
 (Apache-2.0); each file's header names the original and lists the changes.
 `overlapping_index`, `int4_primary_key` and `nullable_unique_column` were

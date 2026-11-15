@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The `pghealth` command runs the checks against any database outside
+  pytest: staging, a restored production snapshot, a replica. It makes its
+  session read-only (and refuses to run if PostgreSQL does not confirm it),
+  sets a statement and lock timeout, reads the ignores of `./pyproject.toml`,
+  and prints text, the JSON report or GitHub Actions annotations
+  (`--format text|json|github`). See [docs/cli.md](docs/cli.md).
+- Findings on tables that frameworks and packages create (`django.contrib`,
+  django-taggit, django-celery-beat and -results, DRF's `authtoken_token`,
+  Wagtail, Alembic's `alembic_version`, Celery's result tables, Flyway,
+  Liquibase) are ignored by default, except `invalid_index` and
+  `sequence_near_overflow`. `ignore_framework_tables = false` reports them;
+  a list of package names limits the skip to those packages.
+- `--pghealth-list-checks` also lists the active ignores, each with the
+  file and position it comes from, and the framework-owned tables.
+- Three checks ported from pg-index-health-sql: `json_column` (`json`
+  instead of `jsonb`), `unlogged_table`, and `timestamp_without_time_zone`
+  (`timestamp` without time zone and `timetz`; off by default).
+- An ignored finding records where its ignore comes from:
+  `IgnoredFinding.source`, and `source` in the JSON report's `ignored`
+  entries.
+
+### Changed
+
+- Thirteen checks run by default (eleven before): `json_column` and
+  `unlogged_table` are on.
+
 ## [0.2.0] - 2026-11-15
 
 ### Added

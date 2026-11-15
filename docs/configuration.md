@@ -21,6 +21,7 @@ usage error.
 | `warn_only` | bool | `false` | `--pghealth-warn` |
 | `json` | path | none | `--pghealth-json PATH` |
 | `ignore` | array of tables | none | |
+| `ignore_framework_tables` | bool, or list of package names | `true` | |
 
 `--pghealth-enable` and `--pghealth-disable` add to the lists in the file.
 
@@ -62,7 +63,25 @@ copy; that costs well under a second per worker. With `-x` or `--maxfail`
 the workers' results are still reported.
 
 `pytest --pghealth-list-checks` prints every check, `on` or `off` for the
-current configuration, and exits.
+current configuration, then the active ignores, each with the file and
+position it comes from, and the built-in framework tables, and exits:
+
+```text
+pghealth checks (on: runs with this configuration)
+  on   foreign_key_without_index    foreign keys with no index on the referencing columns
+  ...
+  off  btree_index_on_array         B-tree indexes on array columns (off by default)
+
+ignores (1):
+  check foreign_key_without_index, object public.audit_log: append-only; parents are never deleted
+    from /home/me/app/pyproject.toml: ignore #1
+
+framework-owned tables, skipped by every check except invalid_index and sequence_near_overflow
+  from the built-in list (ignore_framework_tables = false to report them):
+  django: django_migrations
+  django.contrib.admin: django_admin_log
+  ...
+```
 
 A URL without a driver (`postgresql://...`) connects with psycopg, then
 psycopg2, then pg8000 through SQLAlchemy, whichever is installed. A URL with
@@ -88,26 +107,60 @@ reason = "append-only; parents are never deleted"
 Ignored findings do not fail the run; the summary counts them and the JSON
 report lists them with their reasons.
 
-Tables that come from another package are a common case. In a Django
-project, `django.contrib` and third-party apps bring their own tables, with
-`integer` keys and per-`ForeignKey` indexes you cannot change from your
-code:
-
-```toml
-[[tool.pghealth.ignore]]
-check = "int4_primary_key"
-object = "public.auth_*"
-reason = "django.contrib.auth: not ours to migrate"
-
-[[tool.pghealth.ignore]]
-check = "int4_primary_key"
-object = "public.django_content_type"
-reason = "django.contrib.contenttypes: not ours to migrate"
-```
-
-Keep such ignores narrow: name the check, and the tables as exactly as you
+Keep ignores narrow: name the check, and the tables as exactly as you
 can. `*` matches any characters, dots included, so `public.auth_*` also
 matches a table of your own called `auth_tokens`.
+
+An ignore in `pyproject.toml` is checked before the built-in framework
+list, so its reason is the one reported.
+
+## Framework-owned tables
+
+Frameworks and third-party packages bring tables your migrations do not
+define: `django.contrib.auth` has `integer` keys and per-`ForeignKey`
+indexes you cannot change from your code. Findings on those tables are
+ignored by default; the report counts them as ignored, with the package as
+the reason, and the JSON report lists them with
+`"source": "built-in (ignore_framework_tables)"`.
+
+Two checks still report them: `invalid_index` and `sequence_near_overflow`
+describe the state of your database (a failed index build, a sequence
+running out), which you fix whoever wrote the migration.
+
+| Package | Tables (in any schema) |
+|---|---|
+| `django` | `django_migrations` |
+| `django.contrib.admin` | `django_admin_log` |
+| `django.contrib.auth` | `auth_group`, `auth_group_permissions`, `auth_permission`, `auth_user`, `auth_user_groups`, `auth_user_user_permissions` |
+| `django.contrib.contenttypes` | `django_content_type` |
+| `django.contrib.sessions` | `django_session` |
+| `django.contrib.sites` | `django_site` |
+| `django.contrib.flatpages` | `django_flatpage`, `django_flatpage_sites` |
+| `django.contrib.redirects` | `django_redirect` |
+| `django-taggit` | `taggit_tag`, `taggit_taggeditem` |
+| `django-celery-beat` | `django_celery_beat_*` |
+| `django-celery-results` | `django_celery_results_*` |
+| `djangorestframework (authtoken)` | `authtoken_token` |
+| `wagtail` | `wagtail*` |
+| `alembic` | `alembic_version` |
+| `celery (database result backend)` | `celery_taskmeta`, `celery_tasksetmeta` |
+| `flyway` | `flyway_schema_history` |
+| `liquibase` | `databasechangelog`, `databasechangeloglock` |
+
+The patterns match the table name only, so a finding on your own table that
+references `auth_user` is still reported, and so is an index of yours
+whose name happens to start with `wagtail`. A project that uses the default
+`auth.User` model for millions of users may want `auth_user` checked:
+
+```toml
+[tool.pghealth]
+ignore_framework_tables = false                 # report every table
+# or only some packages:
+ignore_framework_tables = ["django.contrib.admin", "django.contrib.contenttypes", "alembic"]
+```
+
+`pytest --pghealth-list-checks` (and `pghealth --list-checks`) prints the
+list that is in effect.
 
 ## JSON report
 
@@ -118,7 +171,7 @@ to the directory pytest was started in; missing directories are created:
 {
   "format": 1,
   "tool": "pytest-pghealth",
-  "tool_version": "0.1.0",
+  "tool_version": "0.3.0",
   "server_version": "18.1",
   "schemas": null,
   "checks": ["foreign_key_without_index", "..."],
@@ -139,6 +192,8 @@ to the directory pytest was started in; missing directories are created:
 }
 ```
 
+Each entry of `ignored` is a finding plus its `reason` and `source` (the
+file and position of the ignore, or the built-in framework list).
 `format` changes when a key changes meaning or disappears. From code,
 `Report.to_json()` gives the same document.
 
@@ -150,7 +205,7 @@ from pytest_pghealth import run_checks, Settings
 report = run_checks(engine, schemas=["public"], disable=["int4_primary_key"])
 report.ok  # no findings and no failed checks
 report.findings  # list of Finding(check, schema, table, object, message, fix)
-report.ignored  # list of IgnoredFinding(finding, reason)
+report.ignored  # list of IgnoredFinding(finding, reason, source)
 report.errors  # list of CheckError(check, error): a query that failed
 print(report.format())
 ```
