@@ -55,18 +55,21 @@ jobs:
             git -C "$work/src" fetch -q --depth 1 "$1" "$2"
             git -C "$work/src" checkout -q FETCH_HEAD
           }
+          # dependencies as they were on the day of docs/real-projects.md
+          # (the FastAPI template has its own uv.lock)
+          pinned="--exclude-newer 2026-11-15T17:00:00Z"
           case "$PROJECT" in
             fastapi-template)
               fetch https://github.com/fastapi/full-stack-fastapi-template aabb90126964a164e02aff39e7c385bb0598236d
               cd "$work/src/backend"
               export DATABASE_URL=postgresql://postgres:pg@localhost:5432/project
               export UV_PYTHON=3.14
-              uv sync
+              uv sync --locked
               uv run alembic upgrade head
               ;;
             prefect)
               uv venv "$work/venv" -p 3.12
-              uv pip install --python "$work/venv" prefect==3.9.3
+              uv pip install $pinned --python "$work/venv" prefect==3.9.3
               uv pip show --python "$work/venv" prefect | head -2
               export PREFECT_API_DATABASE_CONNECTION_URL=postgresql+asyncpg://postgres:pg@localhost:5432/project
               "$work/venv/bin/prefect" server database upgrade -y
@@ -75,7 +78,7 @@ jobs:
               fetch https://github.com/netbox-community/netbox 2ac39b5da75d4b83cbb14a0c3307f1839cc65ac6
               uv venv "$work/venv" -p 3.12
               sed -E 's/psycopg\[c,pool\]/psycopg[binary,pool]/' "$work/src/requirements.txt" > "$work/requirements.txt"
-              uv pip install --python "$work/venv" -r "$work/requirements.txt"
+              uv pip install $pinned --python "$work/venv" -r "$work/requirements.txt"
               cat > "$work/src/netbox/netbox/configuration.py" <<'PY'
           ALLOWED_HOSTS = ["*"]
           DATABASES = {
@@ -99,7 +102,7 @@ jobs:
               ;;
             wagtail)
               uv venv "$work/venv" -p 3.12
-              uv pip install --python "$work/venv" wagtail==8.1 "psycopg[binary]"
+              uv pip install $pinned --python "$work/venv" wagtail==8.1 "psycopg[binary]"
               uv pip show --python "$work/venv" wagtail | head -2
               "$work/venv/bin/wagtail" start mysite
               cd mysite
@@ -131,6 +134,8 @@ jobs:
           if [ "$PROJECT" = prefect ]; then url=postgresql+asyncpg://postgres:pg@localhost:5432/project; fi
           uv run --no-sync python scripts/realworld.py "$PROJECT" "$url" realworld-out
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
         with:
+          if-no-files-found: ignore
           name: realworld-${{ matrix.project }}
           path: realworld-out/

@@ -402,9 +402,24 @@ def test_overlapping_index_of_a_foreign_key(schema):
     (finding,) = schema.check("overlapping_index")
     assert finding.object == "member_grp_id_idx"
     assert (
-        "foreign key member_grp_id_fkey, which member_grp_name_uniq covers"
+        "those of foreign key member_grp_id_fkey, which member_grp_name_uniq covers"
         in finding.message
     )
     schema.apply_all("overlapping_index")
     # dropping it leaves the foreign key indexed
     assert schema.check("foreign_key_without_index") == []
+
+
+def test_overlapping_partial_indexes_say_nothing_about_foreign_keys(schema):
+    schema.sql(
+        "create table grp (id int primary key)",
+        "create table member (id int primary key, grp_id int references grp, name text,"
+        " deleted_at timestamptz)",
+        "create index member_grp on member (grp_id) where deleted_at is null",
+        "create index member_grp_name on member (grp_id, name) where deleted_at is null",
+    )
+    (finding,) = schema.check("overlapping_index")
+    assert finding.object == "member_grp"
+    assert "foreign key" not in finding.message
+    # neither partial index serves the foreign key
+    assert schema.targets("foreign_key_without_index") == ["member.member_grp_id_fkey"]

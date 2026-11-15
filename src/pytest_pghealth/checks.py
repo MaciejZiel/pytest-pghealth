@@ -94,7 +94,7 @@ def _overlapping_index(row: Row) -> Finding:
             f"{row['covering_index_name']}, which serves the same lookups; "
             "the shorter index only adds write cost."
             + (
-                f" It looks like the index of foreign key {row['foreign_key_name']}, "
+                f" Its columns are those of foreign key {row['foreign_key_name']}, "
                 f"which {row['covering_index_name']} covers as well."
                 if row.get("foreign_key_name")
                 else ""

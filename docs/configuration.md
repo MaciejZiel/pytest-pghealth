@@ -95,13 +95,19 @@ code:
 
 ```toml
 [[tool.pghealth.ignore]]
+check = "int4_primary_key"
 object = "public.auth_*"
 reason = "django.contrib.auth: not ours to migrate"
 
 [[tool.pghealth.ignore]]
-object = "public.django_*"
-reason = "django.contrib: not ours to migrate"
+check = "int4_primary_key"
+object = "public.django_content_type"
+reason = "django.contrib.contenttypes: not ours to migrate"
 ```
+
+Keep such ignores narrow: name the check, and the tables as exactly as you
+can. `*` matches any characters, dots included, so `public.auth_*` also
+matches a table of your own called `auth_tokens`.
 
 ## JSON report
 

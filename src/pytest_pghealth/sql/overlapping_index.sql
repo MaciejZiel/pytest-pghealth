@@ -61,9 +61,11 @@ select distinct on (a.indexrelid)
     a.index_ident,
     a.index_kind,
     b.index_name as covering_index_name,
-    /* the foreign key the shorter index was made for, if any (Django
-       creates one per ForeignKey): the longer index covers it as well */
-    (
+    /* a foreign key on exactly the shorter index's columns, if any (Django
+       creates such an index per ForeignKey). Only for a non-partial pair:
+       a partial index serves no foreign key (foreign_key_without_index uses
+       the same rule), so then nothing is said about covering one. */
+    case when a.predicate = '' then (
         select c.conname::text
         from pg_catalog.pg_constraint c
         where
@@ -73,7 +75,7 @@ select distinct on (a.indexrelid)
             c.conkey <@ a.key_columns
         order by c.conname
         limit 1
-    ) as foreign_key_name
+    ) end as foreign_key_name
 from
     idx a
     inner join idx b

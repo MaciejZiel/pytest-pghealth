@@ -99,15 +99,16 @@ foreign_key_without_index: public.item.item_owner_id_fkey
 
 ## What changed in pytest-pghealth
 
-- `overlapping_index` now says when the redundant index is the index of a
-  foreign key and that the longer index still covers that foreign key. On
+- `overlapping_index` now says when the redundant index has exactly the
+  columns of a foreign key, and that the longer index still covers that
+  foreign key. On
   the Django projects this is most of the findings, and without it the
   natural worry is "if I drop this, is my foreign key unindexed?" (it is
   not: `foreign_key_without_index` accepts any index whose leading columns
   are the key's).
 - [Django advice](configuration.md#ignores) for tables that belong to
-  other packages: an ignore by table pattern, for example
-  `object = "public.auth_*"` with the reason "django.contrib.auth".
+  other packages: a narrow ignore per check and table pattern, for example
+  `check = "int4_primary_key"`, `object = "public.auth_*"`.
 
 ## Reproduce
 
