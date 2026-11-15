@@ -7,13 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-15
+
 ### Added
 
 - `--pghealth-list-checks` lists the checks, `on` or `off` for the current
   configuration, and exits.
-- `overlapping_index` names the foreign key a redundant index was made for
-  (Django creates one per `ForeignKey`) and says the longer index still
-  covers it.
+- `overlapping_index` names the foreign key whose columns a redundant,
+  non-partial index has (Django creates one such index per `ForeignKey`)
+  and says the longer index still covers it.
 - [Real projects](docs/real-projects.md): every check against the migrated
   schemas of the full-stack FastAPI template, Prefect, NetBox and Wagtail,
   each finding classified (313 findings, no false positives), and the
@@ -58,5 +60,6 @@ The first release.
   schemas, ignores with a required reason, the sequence threshold, and a JSON
   report (`--pghealth-json`).
 
-[Unreleased]: https://github.com/MaciejZiel/pytest-pghealth/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/MaciejZiel/pytest-pghealth/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/MaciejZiel/pytest-pghealth/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MaciejZiel/pytest-pghealth/releases/tag/v0.1.0
