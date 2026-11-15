@@ -47,12 +47,15 @@ jobs:
           psql -h localhost -U postgres -c "create database project"
           work="$RUNNER_TEMP/work"
           mkdir -p "$work"
+          # outside this checkout, so its [tool.uv] exclude-newer does not apply
+          cd "$work"
           case "$PROJECT" in
             fastapi-template)
               git clone --depth 1 https://github.com/fastapi/full-stack-fastapi-template "$work/src"
               git -C "$work/src" rev-parse HEAD
               cd "$work/src/backend"
               export DATABASE_URL=postgresql://postgres:pg@localhost:5432/project
+              export UV_PYTHON=3.14
               uv sync
               uv run alembic upgrade head
               ;;
@@ -94,10 +97,12 @@ jobs:
               uv venv "$work/venv" -p 3.12
               uv pip install --python "$work/venv" wagtail "psycopg[binary]"
               uv pip show --python "$work/venv" wagtail | head -2
-              cd "$work"
               "$work/venv/bin/wagtail" start mysite
               cd mysite
               cat >> mysite/settings/dev.py <<'PY'
+
+          # Wagtail's search backend uses PostgreSQL full-text fields on PostgreSQL
+          INSTALLED_APPS += ["django.contrib.postgres"]
 
           DATABASES = {
               "default": {
