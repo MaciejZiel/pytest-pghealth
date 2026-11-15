@@ -64,6 +64,8 @@ dev = [
     # PostgreSQL driver for the tests (BSD-3-Clause). psycopg and psycopg2 are
     # LGPL, so not here: CI installs psycopg for the Django job only.
     "pg8000>=1.31",
+    # tests/test_xdist.py: the session check under pytest-xdist (MIT; execnet, MIT).
+    "pytest-xdist>=3.5",
     "ruff",
     "sqlalchemy>=2.0",
 ]

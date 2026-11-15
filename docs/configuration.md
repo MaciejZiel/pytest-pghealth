@@ -19,6 +19,7 @@ usage error.
 | `disable` | list of check names, or `"all"` | | `--pghealth-disable a,b` |
 | `sequence_remaining_percent` | number, 0-100 | `20` | |
 | `warn_only` | bool | `false` | `--pghealth-warn` |
+| | | | `--pghealth-list-checks` |
 | `json` | path | none | `--pghealth-json PATH` |
 | `ignore` | array of tables | none | |
 
@@ -43,11 +44,25 @@ test, before the session-scoped fixtures are torn down, against the first of:
 4. with pytest-django, the test database of `django_alias`, if a test used
    the database.
 
-When none applies, the summary says so and the run's result is unchanged.
-`--collect-only` never runs the check.
+When nothing is configured (no URL, no registered target, no `fixture`,
+no pytest-django), the run fails: the check was asked for and cannot run.
+When a source is configured but this run never set it up (the fixture or
+the Django database was not used by any of the selected tests), the run
+fails if `--pghealth` was on the command line, and only shows a warning if
+the check was enabled by `session = true` alone, so `pytest tests/unit`
+keeps passing. `--collect-only` never runs the check.
+
 When the check cannot run (the database refuses the connection), the run
-fails and the summary shows the error. Under pytest-xdist only a URL works;
-the check runs in the controller.
+fails and the summary shows the error.
+
+Under pytest-xdist, a URL is checked once, by the controller. Without one,
+each worker runs the check against its own source (with pytest-django, its
+own copy of the test database) and sends the report to the controller,
+which reports each finding once, writes the JSON report and sets the exit
+code.
+
+`pytest --pghealth-list-checks` prints every check, `on` or `off` for the
+current configuration, and exits.
 
 A URL without a driver (`postgresql://...`) connects with psycopg, then
 psycopg2, then pg8000 through SQLAlchemy, whichever is installed. A URL with

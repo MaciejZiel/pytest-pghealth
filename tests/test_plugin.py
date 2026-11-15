@@ -166,12 +166,18 @@ def test_session_check_from_fixture_name(project):
     assert result.ret == 1
     result.stdout.fnmatch_lines(["*1 problem (fixture engine)"])
 
+    # enabled in pyproject.toml only: a run that never set the fixture up
+    # (a subset of the tests) just says so ...
     project.makepyfile("def test_uses(): pass")
     result = project.runpytest()
     assert result.ret == 0
     result.stdout.fnmatch_lines(
         ["*fixture 'engine' was not alive at the end of the session*"]
     )
+    # ... while --pghealth asks for a check in this run, so it fails
+    result = project.runpytest("--pghealth")
+    assert result.ret == 1
+    result.stdout.fnmatch_lines(["*fixture 'engine' was not alive*"])
 
 
 def test_session_check_skipped_on_collect_only(project):
@@ -208,7 +214,7 @@ def test_register_twice_checks_once(project):
 def test_session_check_with_nothing_to_check(project):
     project.makepyfile("def test_ok(): pass")
     result = project.runpytest("--pghealth")
-    assert result.ret == 0
+    assert result.ret == 1
     result.stdout.fnmatch_lines(["*nothing to check*"])
 
 
@@ -281,3 +287,26 @@ def test_session_check_runs_before_session_fixtures_tear_down(project):
     result = project.runpytest("--pghealth", "-x")
     result.assert_outcomes(failed=1)
     result.stdout.fnmatch_lines(["*1 problem (registered target)"])
+
+
+def test_list_checks(project):
+    project.makepyprojecttoml(
+        '[tool.pghealth]\nenable = ["btree_index_on_array"]\ndisable = ["int4_primary_key"]\n'
+    )
+    result = project.runpytest("--pghealth-list-checks")
+    assert result.ret == 0
+    result.stdout.fnmatch_lines(
+        [
+            "pghealth checks (on: runs with this configuration)",
+            "  on   foreign_key_without_index  *foreign keys with no index*",
+            "  off  int4_primary_key  *",
+            "  on   btree_index_on_array  *",
+        ]
+    )
+    assert "collected" not in result.stdout.str()
+
+
+def test_list_checks_reports_bad_configuration(project):
+    project.makepyprojecttoml("[tool.pghealth]\ndisable = ['nope']\n")
+    result = project.runpytest("--pghealth-list-checks")
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
