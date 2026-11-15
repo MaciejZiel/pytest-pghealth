@@ -110,10 +110,10 @@ report lists them with their reasons.
 from pytest_pghealth import run_checks, Settings
 
 report = run_checks(engine, schemas=["public"], disable=["int4_primary_key"])
-report.ok          # no findings and no failed checks
-report.findings    # list of Finding(check, schema, table, object, message, fix)
-report.ignored     # list of IgnoredFinding(finding, reason)
-report.errors      # list of CheckError(check, error): a query that failed
+report.ok  # no findings and no failed checks
+report.findings  # list of Finding(check, schema, table, object, message, fix)
+report.ignored  # list of IgnoredFinding(finding, reason)
+report.errors  # list of CheckError(check, error): a query that failed
 print(report.format())
 ```
 
