@@ -32,9 +32,7 @@ def test_foreign_key_without_index(schema):
     fix = next(
         f.fix for f in schema.check("foreign_key_without_index") if f.table == "child"
     )
-    assert fix == (
-        f"CREATE INDEX CONCURRENTLY child_parent_id_idx ON {schema.name}.child (parent_id);"
-    )
+    assert fix == (f"CREATE INDEX CONCURRENTLY ON {schema.name}.child (parent_id);")
     schema.apply_all("foreign_key_without_index")
 
 
@@ -170,8 +168,7 @@ def test_int4_primary_key(schema):
     # the fixes widen the sequences too, identity ones included
     types = schema.sql(
         "select format_type(seqtypid, null) from pg_sequence"
-        f" where seqrelid::regclass::text in ('{schema.name}.s1_id_seq',"
-        f" '{schema.name}.s2_id_seq', '{schema.name}.s5_id_seq')"
+        " where seqrelid in ('s1_id_seq'::regclass, 's2_id_seq'::regclass, 's5_id_seq'::regclass)"
     )
     assert types == [("bigint",)] * 3
 

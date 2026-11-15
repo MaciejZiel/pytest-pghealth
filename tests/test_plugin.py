@@ -55,7 +55,7 @@ def test_fixture_assert_healthy_fails_with_the_report(project):
         [
             "*pghealth: PostgreSQL 18.1, all user schemas: 11 checks, 1 problem",
             "*foreign_key_without_index: public.orders.orders_customer_id_fkey",
-            "*fix: CREATE INDEX CONCURRENTLY orders_customer_id_idx ON public.orders (customer_id);",
+            "*fix: CREATE INDEX CONCURRENTLY ON public.orders (customer_id);",
         ]
     )
     # pytrace=False: the report, not a traceback into the plugin

@@ -103,10 +103,7 @@ def test_report_format_and_json():
     text = report.format()
     assert text.splitlines()[0].startswith("pghealth: PostgreSQL 18.1")
     assert "foreign_key_without_index: public.orders.orders_customer_id_fkey" in text
-    assert (
-        "  fix: CREATE INDEX CONCURRENTLY orders_customer_id_idx ON public.orders (customer_id);"
-        in text
-    )
+    assert "  fix: CREATE INDEX CONCURRENTLY ON public.orders (customer_id);" in text
     assert 'object = "public.orders.orders_customer_id_fkey"' in text
     data = json.loads(report.to_json())
     assert data["format"] == 1

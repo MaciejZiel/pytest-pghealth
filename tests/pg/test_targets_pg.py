@@ -17,7 +17,7 @@ FK_SCHEMA = (
 
 
 def targets(target, schema):
-    report = run_checks(target, schemas=[schema.name], disable=["all"], enable=["all"])
+    report = run_checks(target, schemas=[schema.name], enable=["all"])
     assert not report.errors
     return [f.target for f in report.findings]
 
@@ -94,10 +94,7 @@ def test_plugin_session_check_with_url(project, schema):
             "*= pghealth =*",
             "PostgreSQL *: 11 checks, 1 problem (url)",
             f"foreign_key_without_index: {schema.name}.child.child_parent_id_fkey",
-            (
-                f"  fix: CREATE INDEX CONCURRENTLY child_parent_id_idx ON {schema.name}.child "
-                "(parent_id);"
-            ),
+            (f"  fix: CREATE INDEX CONCURRENTLY ON {schema.name}.child (parent_id);"),
         ]
     )
     assert '"ok": false' in (project.path / "report.json").read_text()
