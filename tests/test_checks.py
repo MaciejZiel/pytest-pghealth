@@ -3,7 +3,7 @@ from importlib import resources
 
 import pytest
 
-from pytest_pghealth.checks import CHECKS, quote_ident
+from pytest_pghealth.checks import CHECKS
 
 SQL_DIR = resources.files("pytest_pghealth").joinpath("sql")
 PLACEHOLDERS = {"{schema_filter}", "{remaining_percent}", "{nulls_not_distinct}"}
@@ -25,7 +25,7 @@ def test_sql_is_safe_for_every_driver(name):
     # pyformat drivers (psycopg, pg8000 through SQLAlchemy) treat % specially
     assert "%" not in sql
     # SQLAlchemy text() and some drivers treat :name as a bind parameter
-    assert not re.search(r"(?<![:\d]):[a-z_]", sql)
+    assert not re.search(r"(?<![:\d[]):[a-z_]", sql)
     assert set(re.findall(r"\{[a-z_]+\}", sql)) <= PLACEHOLDERS
     assert "{schema_filter}" in sql
 
@@ -46,23 +46,6 @@ def test_original_sql_says_so(name):
 
 def test_only_the_array_check_is_off_by_default():
     assert [n for n, c in CHECKS.items() if not c.default] == ["btree_index_on_array"]
-
-
-@pytest.mark.parametrize(
-    ("name", "quoted"),
-    [
-        ("orders", "orders"),
-        ("order_items2", "order_items2"),
-        ("Orders", '"Orders"'),
-        ("order items", '"order items"'),
-        ("user", '"user"'),
-        ("select", '"select"'),
-        ('we"ird', '"we""ird"'),
-        ("2fa", '"2fa"'),
-    ],
-)
-def test_quote_ident(name, quoted):
-    assert quote_ident(name) == quoted
 
 
 def build(name, **row):
@@ -111,6 +94,8 @@ def test_duplicate_index_drops_the_constraint_when_it_backs_one():
         "index_name": "t_a_key1",
         "index_ident": "public.t_a_key1",
         "kept_index_name": "t_a_key",
+        "constraint_ident": "t_a_key1",
+        "index_kind": "i",
     }
     assert build("duplicate_index", constraint_name=None, **common).fix == (
         "DROP INDEX CONCURRENTLY public.t_a_key1;"
@@ -127,6 +112,7 @@ def test_invalid_partitioned_index_explains_attach():
         "table_ident": '"Sales".m',
         "index_name": "m_idx",
         "index_ident": '"Sales".m_idx',
+        "schema_ident": '"Sales"',
     }
     assert build("invalid_index", index_kind="i", **row).fix == (
         'REINDEX INDEX CONCURRENTLY "Sales".m_idx;'
@@ -285,16 +271,40 @@ def test_other_fixes():
         ).fix
         == "ALTER TABLE public.t ALTER COLUMN p_id TYPE bigint;"
     )
-    assert (
-        "USING gin (tags)"
-        in build(
-            "btree_index_on_array",
-            schema_name="public",
-            table_name="t",
-            table_ident="public.t",
-            index_name="t_tags_idx",
-            index_ident="public.t_tags_idx",
-            column_name="tags",
-            column_ident="tags",
-        ).fix
+    array_row = {
+        "schema_name": "public",
+        "table_name": "t",
+        "table_ident": "public.t",
+        "index_name": "t_tags_idx",
+        "index_ident": "public.t_tags_idx",
+        "index_kind": "i",
+        "key_column_count": 1,
+        "backs_constraint": False,
+        "columns": ["tags"],
+        "column_idents": ["tags"],
+    }
+    assert build("btree_index_on_array", **array_row).fix == (
+        "CREATE INDEX CONCURRENTLY ON public.t USING gin (tags);\n"
+        "DROP INDEX CONCURRENTLY public.t_tags_idx;"
     )
+    array_row["key_column_count"] = 2
+    fix = build("btree_index_on_array", **array_row).fix
+    assert "DROP INDEX" not in fix
+    assert "keep t_tags_idx" in fix
+
+
+def test_partitioned_indexes_are_dropped_without_concurrently():
+    row = {
+        "schema_name": "public",
+        "table_name": "m",
+        "table_ident": "public.m",
+        "index_name": "m_a_idx1",
+        "index_ident": "public.m_a_idx1",
+        "index_kind": "I",
+        "constraint_name": None,
+        "constraint_ident": None,
+        "kept_index_name": "m_a_idx",
+        "covering_index_name": "m_a_b_idx",
+    }
+    assert build("duplicate_index", **row).fix == "DROP INDEX public.m_a_idx1;"
+    assert build("overlapping_index", **row).fix == "DROP INDEX public.m_a_idx1;"

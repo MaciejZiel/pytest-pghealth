@@ -292,3 +292,99 @@ def test_default_schemas_are_all_user_schemas(schema, engine):
     assert report.schemas is None
     assert f"{schema.name}.nopk" in [f.target for f in report.findings]
     assert not any(f.schema.startswith("pg_") for f in report.findings)
+
+
+def test_duplicate_index_keeps_the_primary_key(schema):
+    schema.sql(
+        "create table pk (id int not null unique)",
+        "alter table pk add primary key (id)",
+    )
+    (finding,) = schema.check("duplicate_index")
+    assert finding.object == "pk_id_key"
+    assert finding.fix == f"ALTER TABLE {schema.name}.pk DROP CONSTRAINT pk_id_key;"
+    schema.apply_all("duplicate_index")
+    assert schema.sql(
+        f"select count(*) from pg_constraint where conrelid = '{schema.name}.pk'::regclass"
+        " and contype = 'p'"
+    ) == [(1,)]
+
+
+def test_indexes_on_a_partitioned_table(schema):
+    schema.sql(
+        "create table pm (id int, a int, b int, ts date not null) partition by range (ts)",
+        "create table pm_2026 partition of pm for values from ('2026-01-01') to ('2027-01-01')",
+        "create index pm_a_1 on pm (a)",
+        "create index pm_a_2 on pm (a)",
+        "create index pm_b on pm (b)",
+        "create index pm_b_a on pm (b, a)",
+    )
+    # reported on the partitioned table only, with fixes PostgreSQL accepts there
+    assert schema.targets("duplicate_index") == ["pm.pm_a_2"]
+    assert schema.targets("overlapping_index") == ["pm.pm_b"]
+    schema.apply_all("duplicate_index")
+    schema.apply_all("overlapping_index")
+
+
+def test_foreign_keys_with_other_actions_are_not_duplicates(schema):
+    schema.sql(
+        "create table dp (id int primary key)",
+        "create table dc (id int primary key, p int,"
+        " constraint dc_a foreign key (p) references dp on delete restrict,"
+        " constraint dc_b foreign key (p) references dp on delete cascade,"
+        " constraint dc_c foreign key (p) references dp deferrable)",
+    )
+    assert schema.check("duplicate_foreign_key") == []
+
+
+def test_nullable_unique_column_matches_whole_names(schema):
+    schema.sql(
+        "create table nw (id int primary key, a int, x int, ba int)",
+        # "a" is not named by the predicate, even though "ba" contains it
+        "create unique index nw_a_x on nw (a, x) where ba is not null",
+    )
+    (finding,) = schema.check("nullable_unique_column")
+    assert "a, x" in finding.message
+
+
+def test_btree_index_on_array_keeps_multicolumn_indexes(schema):
+    schema.sql(
+        "create table am (id int primary key, n int, tags text[])",
+        "create index am_n_tags on am (n, tags)",
+    )
+    (finding,) = schema.check("btree_index_on_array")
+    assert "DROP INDEX" not in finding.fix
+    schema.apply(finding)
+    assert schema.sql(
+        "select count(*) from pg_indexes where tablename = 'am' and position('gin' in indexdef) > 0"
+    ) == [(1,)]
+
+
+def test_a_failing_check_leaves_the_callers_transaction_usable(schema, monkeypatch):
+    from sqlalchemy import create_engine
+
+    from pytest_pghealth.checks import Check
+
+    original = Check.sql
+
+    def broken(self):
+        return (
+            "-- pghealth: x\nselect 1 / 0"
+            if self.name == "invalid_index"
+            else original(self)
+        )
+
+    monkeypatch.setattr(Check, "sql", broken)
+    schema.sql(
+        "create table parent (id bigint primary key)",
+        "create table child (id bigint primary key, parent_id bigint references parent)",
+    )
+    engine = create_engine(schema.engine.url)
+    try:
+        with engine.connect() as connection:
+            connection.exec_driver_sql("select 1")  # the caller's transaction is open
+            report = run_checks(connection, schemas=[schema.name])
+            assert [e.check for e in report.errors] == ["invalid_index"]
+            assert [f.check for f in report.findings] == ["foreign_key_without_index"]
+            assert connection.exec_driver_sql("select 2").scalar() == 2
+    finally:
+        engine.dispose()

@@ -18,6 +18,7 @@ with
             quote_ident(nsp.nspname) || '.' || quote_ident(tbl.relname) as table_ident,
             ic.relname::text as index_name,
             quote_ident(nsp.nspname) || '.' || quote_ident(ic.relname) as index_ident,
+            ic.relkind::text as index_kind,
             pi.indisunique,
             pi.indnatts = pi.indnkeyatts as no_include,
             pi.indexprs is null as no_expressions,
@@ -57,6 +58,7 @@ select distinct on (a.indexrelid)
     a.table_ident,
     a.index_name,
     a.index_ident,
+    a.index_kind,
     b.index_name as covering_index_name
 from
     idx a

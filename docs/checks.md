@@ -42,13 +42,14 @@ mostly finds hand-written SQL and `db_index=False`.
 method, columns, operator classes, collations, sort order, expressions and
 predicate.
 
-**Which one is reported.** The index that stays is the one backing a
-constraint, then a unique one, then the oldest; every other copy is reported.
+**Which one is reported.** The index that stays is the primary key's, then
+one backing a constraint, then a unique one, then the oldest; every other
+copy is reported.
 When the copy itself backs a constraint (two `UNIQUE (email)` constraints),
 the fix drops the constraint.
 
-**Fix:** `DROP INDEX CONCURRENTLY <index>;` or
-`ALTER TABLE <table> DROP CONSTRAINT <constraint>;`
+**Fix:** `DROP INDEX CONCURRENTLY <index>;` (without `CONCURRENTLY` for an
+index on a partitioned table) or `ALTER TABLE <table> DROP CONSTRAINT <constraint>;`
 
 ## overlapping_index
 
@@ -153,7 +154,7 @@ constraint was meant to say.
 **Skipped:** single-column unique indexes (an optional unique value with
 many NULLs is usually intended), indexes created with `NULLS NOT DISTINCT`
 (PostgreSQL 15+), and partial indexes whose predicate names the column
-(`WHERE tenant_id IS NOT NULL`).
+(`WHERE tenant_id IS NOT NULL`; the name must appear as a whole word).
 
 **Fix:** `ALTER TABLE <table> ALTER COLUMN <column> SET NOT NULL;`, or on
 PostgreSQL 15+ recreate the constraint with `UNIQUE NULLS NOT DISTINCT`.
@@ -170,8 +171,10 @@ constraint.
 
 ## duplicate_foreign_key
 
-**Finds** foreign keys identical to another one on the same table (same
-columns, same referenced table and columns). Each is checked on every
+**Finds** foreign keys identical to another one on the same table: same
+columns, same referenced table and columns, same `ON DELETE` and
+`ON UPDATE` actions, match type and deferrability. Foreign keys that differ
+in any of these behave differently and are not reported. Each is checked on every
 insert and update. The first by name is kept; the others are reported.
 
 **Fix:** `ALTER TABLE <table> DROP CONSTRAINT <constraint>;`
@@ -184,8 +187,9 @@ overlap (`@>`, `<@`, `&&`), which need a GIN index. Off by default because
 whole-array equality is a legitimate use; turn it on with
 `enable = ["btree_index_on_array"]`.
 
-**Fix:** `CREATE INDEX CONCURRENTLY ON <table> USING gin (<column>);` and
-drop the B-tree index.
+**Fix:** `CREATE INDEX CONCURRENTLY ON <table> USING gin (<column>);`, and
+for a single-column index that no constraint needs, drop the B-tree index.
+A multi-column or constraint index is kept: the fix only adds the GIN index.
 
 ## Origin of the queries
 

@@ -36,7 +36,9 @@ where
     not a.attnotnull and
     (
         pi.indpred is null or
-        position(lower(a.attname) in lower(pg_get_expr(pi.indpred, pi.indrelid))) = 0
+        /* the column name as a whole word: "id" does not match "tenant_id" */
+        pg_get_expr(pi.indpred, pi.indrelid) !~
+            ('\m' || regexp_replace(a.attname, '([^[:alnum:]_])', '\\\1', 'g') || '\M')
     ) and
     {schema_filter} and
     not exists (

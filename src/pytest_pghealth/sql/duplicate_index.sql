@@ -6,7 +6,7 @@
 -- Modified for pytest-pghealth: several schemas, invalid indexes
 -- skipped, one row per redundant index naming the index to keep (a constraint's
 -- index, then a unique index, then the oldest), and the constraint to drop when
--- the redundant index backs one.
+-- the redundant index backs one; a primary key is always kept.
 
 -- Indexes identical to another index on the same table: same columns,
 -- operator classes, collations, sort options, expressions and predicate.
@@ -19,7 +19,10 @@ with
             ic.relname::text as index_name,
             quote_ident(nsp.nspname) || '.' || quote_ident(ic.relname) as index_ident,
             con.conname::text as constraint_name,
+            quote_ident(con.conname) as constraint_ident,
+            ic.relkind::text as index_kind,
             pi.indexrelid,
+            pi.indisprimary,
             pi.indisunique,
             (
                 pi.indrelid::text || ' ' || ic.relam::text || ' ' || pi.indclass::text || ' ' ||
@@ -52,7 +55,7 @@ with
         from idx
         window w as (
             partition by grouping_key
-            order by (constraint_name is not null) desc, indisunique desc, indexrelid
+            order by indisprimary desc, (constraint_name is not null) desc, indisunique desc, indexrelid
         )
     )
 
@@ -63,6 +66,8 @@ select
     index_name,
     index_ident,
     constraint_name,
+    constraint_ident,
+    index_kind,
     kept_index_name
 from ranked
 where position > 1

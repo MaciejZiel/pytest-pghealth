@@ -174,6 +174,37 @@ def test_session_check_from_fixture_name(project):
     )
 
 
+def test_session_check_skipped_on_collect_only(project):
+    project.makeconftest(CONFTEST_REGISTER)
+    project.makepyfile("def test_ok(): pass")
+    result = project.runpytest("--pghealth", "--collect-only")
+    assert result.ret == 0
+    assert "= pghealth =" not in result.stdout.str()
+
+
+def test_json_report_in_a_new_directory_and_unwritable(project):
+    project.makeconftest(CONFTEST_REGISTER)
+    project.makepyfile("def test_ok(): pass")
+    result = project.runpytest("--pghealth", "--pghealth-json", "reports/pghealth.json")
+    assert result.ret == 1
+    assert (project.path / "reports" / "pghealth.json").is_file()
+    (project.path / "blocker").write_text("")
+    result = project.runpytest("--pghealth", "--pghealth-json", "blocker/pghealth.json")
+    result.assert_outcomes(passed=1)
+    result.stdout.fnmatch_lines(
+        ["*the session check failed: cannot write the JSON report*"]
+    )
+
+
+def test_register_twice_checks_once(project):
+    project.makeconftest(
+        CONFTEST_REGISTER + "    pghealth_session.register(connection)\n"
+    )
+    project.makepyfile("def test_ok(): pass")
+    result = project.runpytest("--pghealth")
+    result.stdout.fnmatch_lines(["*: 11 checks, 1 problem (registered target)"])
+
+
 def test_session_check_with_nothing_to_check(project):
     project.makepyfile("def test_ok(): pass")
     result = project.runpytest("--pghealth")

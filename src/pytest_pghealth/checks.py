@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from importlib import resources
@@ -35,123 +34,9 @@ class Check:
         )
 
 
-# PostgreSQL's reserved key words (the "reserved" and "reserved (can be
-# function or type)" columns of the key words appendix): as an identifier
-# they need double quotes.
-_RESERVED = frozenset(
-    [
-        "all",
-        "analyse",
-        "analyze",
-        "and",
-        "any",
-        "array",
-        "as",
-        "asc",
-        "asymmetric",
-        "authorization",
-        "binary",
-        "both",
-        "case",
-        "cast",
-        "check",
-        "collate",
-        "collation",
-        "column",
-        "concurrently",
-        "constraint",
-        "create",
-        "cross",
-        "current_catalog",
-        "current_date",
-        "current_role",
-        "current_schema",
-        "current_time",
-        "current_timestamp",
-        "current_user",
-        "default",
-        "deferrable",
-        "desc",
-        "distinct",
-        "do",
-        "else",
-        "end",
-        "except",
-        "false",
-        "fetch",
-        "for",
-        "foreign",
-        "freeze",
-        "from",
-        "full",
-        "grant",
-        "group",
-        "having",
-        "ilike",
-        "in",
-        "initially",
-        "inner",
-        "intersect",
-        "into",
-        "is",
-        "isnull",
-        "join",
-        "lateral",
-        "leading",
-        "left",
-        "like",
-        "limit",
-        "localtime",
-        "localtimestamp",
-        "natural",
-        "not",
-        "notnull",
-        "null",
-        "offset",
-        "on",
-        "only",
-        "or",
-        "order",
-        "outer",
-        "overlaps",
-        "placing",
-        "primary",
-        "references",
-        "returning",
-        "right",
-        "select",
-        "session_user",
-        "similar",
-        "some",
-        "symmetric",
-        "system_user",
-        "table",
-        "tablesample",
-        "then",
-        "to",
-        "trailing",
-        "true",
-        "union",
-        "unique",
-        "user",
-        "using",
-        "variadic",
-        "verbose",
-        "when",
-        "where",
-        "window",
-        "with",
-    ]
-)
-
-_PLAIN_IDENTIFIER = re.compile(r"[a-z_][a-z0-9_$]*")
-
-
-def quote_ident(name: str) -> str:
-    """Quote ``name`` as PostgreSQL's quote_ident() does."""
-    if _PLAIN_IDENTIFIER.fullmatch(name) and name not in _RESERVED:
-        return name
-    return '"' + name.replace('"', '""') + '"'
+def _concurrently(index_kind: str) -> str:
+    """CONCURRENTLY, except for a partitioned index, which does not support it."""
+    return "" if index_kind == "I" else " CONCURRENTLY"
 
 
 def _columns(names: list[str]) -> str:
@@ -181,12 +66,9 @@ def _foreign_key_without_index(row: Row) -> Finding:
 
 def _duplicate_index(row: Row) -> Finding:
     if row["constraint_name"]:
-        fix = (
-            f"ALTER TABLE {row['table_ident']} DROP CONSTRAINT "
-            f"{quote_ident(row['constraint_name'])};"
-        )
+        fix = f"ALTER TABLE {row['table_ident']} DROP CONSTRAINT {row['constraint_ident']};"
     else:
-        fix = f"DROP INDEX CONCURRENTLY {row['index_ident']};"
+        fix = f"DROP INDEX{_concurrently(row['index_kind'])} {row['index_ident']};"
     return Finding(
         check="duplicate_index",
         schema=row["schema_name"],
@@ -212,7 +94,7 @@ def _overlapping_index(row: Row) -> Finding:
             f"{row['covering_index_name']}, which serves the same lookups; "
             "the shorter index only adds write cost."
         ),
-        fix=f"DROP INDEX CONCURRENTLY {row['index_ident']};",
+        fix=f"DROP INDEX{_concurrently(row['index_kind'])} {row['index_ident']};",
     )
 
 
@@ -225,7 +107,7 @@ def _invalid_index(row: Row) -> Finding:
         fix = (
             "-- create the index on each partition that lacks it, then:\n"
             f"ALTER INDEX {row['index_ident']} ATTACH PARTITION "
-            f"{quote_ident(row['schema_name'])}.<partition_index>;"
+            f"{row['schema_ident']}.<partition_index>;"
         )
     else:
         message = (
@@ -408,20 +290,27 @@ def _duplicate_foreign_key(row: Row) -> Finding:
 
 
 def _btree_index_on_array(row: Row) -> Finding:
+    columns = list(row["columns"])
+    concurrently = _concurrently(row["index_kind"])
+    gin = "\n".join(
+        f"CREATE INDEX{concurrently} ON {row['table_ident']} USING gin ({ident});"
+        for ident in row["column_idents"]
+    )
+    if row["key_column_count"] == 1 and not row["backs_constraint"]:
+        fix = f"{gin}\nDROP INDEX{concurrently} {row['index_ident']};"
+    else:
+        # the index has other columns or enforces a constraint: keep it
+        fix = f"{gin}\n-- and keep {row['index_name']} for its other lookups or its constraint"
     return Finding(
         check="btree_index_on_array",
         schema=row["schema_name"],
         table=row["table_name"],
         object=row["index_name"],
         message=(
-            f"B-tree index {row['index_name']} covers array column "
-            f"{row['column_name']}: it cannot serve @>, <@ or && queries."
+            f"B-tree index {row['index_name']} covers array column(s) "
+            f"{_columns(columns)}: it cannot serve @>, <@ or && queries."
         ),
-        fix=(
-            f"CREATE INDEX CONCURRENTLY ON {row['table_ident']} "
-            f"USING gin ({row['column_ident']});\n"
-            f"DROP INDEX CONCURRENTLY {row['index_ident']};"
-        ),
+        fix=fix,
     )
 
 

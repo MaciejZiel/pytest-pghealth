@@ -15,11 +15,17 @@ _CHECK = re.compile(r"-- pghealth: (\w+)")
 class FakeCursor:
     def __init__(self, connection: FakeConnection) -> None:
         self.connection = connection
-        self.description: list[tuple[str]] = []
+        self.description: list[tuple[str]] | None = []
         self._rows: list[tuple[Any, ...]] = []
 
     def execute(self, sql: str) -> None:
         self.connection.queries.append(sql)
+        if sql.split(" ", 1)[0] in ("savepoint", "release", "rollback"):
+            if not self.connection.in_transaction:
+                raise RuntimeError("SAVEPOINT can only be used in transaction blocks")
+            self.connection.savepoint_log.append(sql)
+            self.description = None
+            return
         match = _CHECK.search(sql)
         if match is None:
             rows = [
@@ -52,7 +58,10 @@ class FakeConnection:
         version: str = "18.1 (Debian 18.1-1.pgdg13+2)",
         version_num: int = 180001,
         failing: tuple[str, ...] = (),
+        in_transaction: bool = False,
     ) -> None:
+        self.in_transaction = in_transaction
+        self.savepoint_log: list[str] = []
         self.rows = rows or {}
         self.version = version
         self.version_num = version_num
