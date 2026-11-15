@@ -49,10 +49,15 @@ jobs:
           mkdir -p "$work"
           # outside this checkout, so its [tool.uv] exclude-newer does not apply
           cd "$work"
+          # the project at a pinned commit, so the results in docs/real-projects.md reproduce
+          fetch() {
+            git init -q "$work/src"
+            git -C "$work/src" fetch -q --depth 1 "$1" "$2"
+            git -C "$work/src" checkout -q FETCH_HEAD
+          }
           case "$PROJECT" in
             fastapi-template)
-              git clone --depth 1 https://github.com/fastapi/full-stack-fastapi-template "$work/src"
-              git -C "$work/src" rev-parse HEAD
+              fetch https://github.com/fastapi/full-stack-fastapi-template aabb90126964a164e02aff39e7c385bb0598236d
               cd "$work/src/backend"
               export DATABASE_URL=postgresql://postgres:pg@localhost:5432/project
               export UV_PYTHON=3.14
@@ -61,14 +66,13 @@ jobs:
               ;;
             prefect)
               uv venv "$work/venv" -p 3.12
-              uv pip install --python "$work/venv" prefect
+              uv pip install --python "$work/venv" prefect==3.9.3
               uv pip show --python "$work/venv" prefect | head -2
               export PREFECT_API_DATABASE_CONNECTION_URL=postgresql+asyncpg://postgres:pg@localhost:5432/project
               "$work/venv/bin/prefect" server database upgrade -y
               ;;
             netbox)
-              git clone --depth 1 https://github.com/netbox-community/netbox "$work/src"
-              git -C "$work/src" rev-parse HEAD
+              fetch https://github.com/netbox-community/netbox 2ac39b5da75d4b83cbb14a0c3307f1839cc65ac6
               uv venv "$work/venv" -p 3.12
               sed -E 's/psycopg\[c,pool\]/psycopg[binary,pool]/' "$work/src/requirements.txt" > "$work/requirements.txt"
               uv pip install --python "$work/venv" -r "$work/requirements.txt"
@@ -95,7 +99,7 @@ jobs:
               ;;
             wagtail)
               uv venv "$work/venv" -p 3.12
-              uv pip install --python "$work/venv" wagtail "psycopg[binary]"
+              uv pip install --python "$work/venv" wagtail==8.1 "psycopg[binary]"
               uv pip show --python "$work/venv" wagtail | head -2
               "$work/venv/bin/wagtail" start mysite
               cd mysite

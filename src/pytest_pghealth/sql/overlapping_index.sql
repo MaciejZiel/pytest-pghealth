@@ -27,6 +27,7 @@ with
                 where con.conindid = pi.indexrelid and con.contype in ('p', 'u', 'x')
             ) as backs_constraint,
             coalesce(pg_get_expr(pi.indpred, pi.indrelid), '') as predicate,
+            (string_to_array(pi.indkey::text, ' ')::int2[])[1:pi.indnkeyatts] as key_columns,
             array(
                 select
                     (string_to_array(pi.indkey::text, ' '))[i] || '/' ||
@@ -59,7 +60,20 @@ select distinct on (a.indexrelid)
     a.index_name,
     a.index_ident,
     a.index_kind,
-    b.index_name as covering_index_name
+    b.index_name as covering_index_name,
+    /* the foreign key the shorter index was made for, if any (Django
+       creates one per ForeignKey): the longer index covers it as well */
+    (
+        select c.conname::text
+        from pg_catalog.pg_constraint c
+        where
+            c.conrelid = a.indrelid and
+            c.contype = 'f' and
+            c.conkey @> a.key_columns and
+            c.conkey <@ a.key_columns
+        order by c.conname
+        limit 1
+    ) as foreign_key_name
 from
     idx a
     inner join idx b

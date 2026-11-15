@@ -117,6 +117,7 @@ def test_overlapping_index(schema):
     (finding,) = schema.check("overlapping_index")
     assert finding.object == "o_a"
     assert "prefix of o_a_b" in finding.message
+    assert "foreign key" not in finding.message
     schema.apply_all("overlapping_index")
 
 
@@ -388,3 +389,22 @@ def test_a_failing_check_leaves_the_callers_transaction_usable(schema, monkeypat
             assert connection.exec_driver_sql("select 2").scalar() == 2
     finally:
         engine.dispose()
+
+
+def test_overlapping_index_of_a_foreign_key(schema):
+    # what Django creates for a ForeignKey next to a unique_together
+    schema.sql(
+        "create table grp (id int primary key)",
+        "create table member (id int primary key, grp_id int references grp, name text,"
+        " constraint member_grp_name_uniq unique (grp_id, name))",
+        "create index member_grp_id_idx on member (grp_id)",
+    )
+    (finding,) = schema.check("overlapping_index")
+    assert finding.object == "member_grp_id_idx"
+    assert (
+        "foreign key member_grp_id_fkey, which member_grp_name_uniq covers"
+        in finding.message
+    )
+    schema.apply_all("overlapping_index")
+    # dropping it leaves the foreign key indexed
+    assert schema.check("foreign_key_without_index") == []
