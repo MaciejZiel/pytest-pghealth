@@ -53,7 +53,7 @@ def test_fixture_assert_healthy_fails_with_the_report(project):
     result.assert_outcomes(passed=3, failed=1)
     result.stdout.fnmatch_lines(
         [
-            "*pghealth: PostgreSQL 18.1, all user schemas: 11 checks, 1 problem",
+            "*pghealth: PostgreSQL 18.1, all user schemas: 13 checks, 1 problem",
             "*foreign_key_without_index: public.orders.orders_customer_id_fkey",
             "*fix: CREATE INDEX CONCURRENTLY ON public.orders (customer_id);",
         ]
@@ -102,9 +102,9 @@ def test_session_check_fails_the_run(project):
     result.assert_outcomes(passed=1)
     result.stdout.fnmatch_lines(
         [
-            "pghealth: session check on, 11 checks",
+            "pghealth: session check on, 13 checks",
             "*= pghealth =*",
-            "PostgreSQL 18.1, all user schemas: 11 checks, 1 problem (registered target)",
+            "PostgreSQL 18.1, all user schemas: 13 checks, 1 problem (registered target)",
             "foreign_key_without_index: public.orders.orders_customer_id_fkey",
             "*fix: CREATE INDEX CONCURRENTLY*",
             "JSON report: out.json",
@@ -129,7 +129,7 @@ def test_session_check_from_pyproject_and_disable_option(project):
     assert project.runpytest().ret == 1
     result = project.runpytest("--pghealth-disable", "foreign_key_without_index")
     assert result.ret == 0
-    result.stdout.fnmatch_lines(["*10 checks, 0 problems (registered target)"])
+    result.stdout.fnmatch_lines(["*12 checks, 0 problems (registered target)"])
     assert project.runpytest("--no-pghealth").ret == 0
 
 
@@ -208,7 +208,7 @@ def test_register_twice_checks_once(project):
     )
     project.makepyfile("def test_ok(): pass")
     result = project.runpytest("--pghealth")
-    result.stdout.fnmatch_lines(["*: 11 checks, 1 problem (registered target)"])
+    result.stdout.fnmatch_lines(["*: 13 checks, 1 problem (registered target)"])
 
 
 def test_session_check_with_nothing_to_check(project):
@@ -292,6 +292,8 @@ def test_session_check_runs_before_session_fixtures_tear_down(project):
 def test_list_checks(project):
     project.makepyprojecttoml(
         '[tool.pghealth]\nenable = ["btree_index_on_array"]\ndisable = ["int4_primary_key"]\n'
+        "[[tool.pghealth.ignore]]\n"
+        'check = "duplicate_index"\nobject = "public.legacy"\nreason = "frozen schema"\n'
     )
     result = project.runpytest("--pghealth-list-checks")
     assert result.ret == 0
@@ -301,6 +303,12 @@ def test_list_checks(project):
             "  on   foreign_key_without_index  *foreign keys with no index*",
             "  off  int4_primary_key  *",
             "  on   btree_index_on_array  *",
+            "ignores (1):",
+            "  check duplicate_index, object public.legacy: frozen schema",
+            "    from */pyproject.toml: ignore #1",
+            "framework-owned tables, skipped by every check except *",
+            "*",
+            "  django.contrib.auth: auth_group, *",
         ]
     )
     assert "collected" not in result.stdout.str()
@@ -327,4 +335,4 @@ def test_registered_targets_report_a_finding_once(project):
     )
     project.makepyfile("def test_ok(): pass")
     result = project.runpytest("--pghealth")
-    result.stdout.fnmatch_lines(["*: 11 checks, 1 problem (registered target)"])
+    result.stdout.fnmatch_lines(["*: 13 checks, 1 problem (registered target)"])

@@ -32,7 +32,8 @@ DATABASES = {
         "PORT": url.port or 5432,
     }
 }
-INSTALLED_APPS = ["shop"]
+# contrib apps: their tables are skipped as framework-owned
+INSTALLED_APPS = ["django.contrib.contenttypes", "django.contrib.auth", "shop"]
 SECRET_KEY = "not secret"
 USE_TZ = True
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -93,7 +94,7 @@ def test_session_check_uses_the_django_test_database(project):
     result.stdout.fnmatch_lines(
         [
             "*= pghealth =*",
-            "PostgreSQL *: 11 checks, 1 problem (Django database 'default')",
+            "PostgreSQL *: 13 checks, 1 problem, * ignored (Django database 'default')",
             "foreign_key_without_index: public.shop_order.shop_order_customer_id_*",
             ("  fix: CREATE INDEX CONCURRENTLY ON public.shop_order (customer_id);"),
         ]

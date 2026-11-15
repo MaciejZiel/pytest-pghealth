@@ -54,6 +54,9 @@ Repository = "https://github.com/MaciejZiel/pytest-pghealth"
 Changelog = "https://github.com/MaciejZiel/pytest-pghealth/blob/main/CHANGELOG.md"
 Issues = "https://github.com/MaciejZiel/pytest-pghealth/issues"
 
+[project.scripts]
+pghealth = "pytest_pghealth.cli:run"
+
 [project.entry-points.pytest11]
 pghealth = "pytest_pghealth.plugin"
 

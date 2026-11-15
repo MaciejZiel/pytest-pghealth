@@ -13,12 +13,12 @@ def test_clean_database():
     assert report.ok
     assert report.server_version == "18.1"
     assert (
-        report.summary() == "PostgreSQL 18.1, all user schemas: 11 checks, 0 problems"
+        report.summary() == "PostgreSQL 18.1, all user schemas: 13 checks, 0 problems"
     )
-    # the version, the savepoint probe, then one query per check, each on
+    # the version, the framework marker tables, the savepoint probe, then one query per check, each on
     # its own cursor
-    assert len(connection.queries) == 13
-    assert connection.closed_cursors == 13
+    assert len(connection.queries) == 16
+    assert connection.closed_cursors == 16
 
 
 def test_findings_and_ignores():
@@ -63,7 +63,7 @@ def test_nulls_not_distinct_needs_postgresql_15():
 def test_default_schema_filter_skips_system_schemas():
     connection = FakeConnection()
     run_checks(connection)
-    assert "left(nsp.nspname, 3) <> 'pg_'" in connection.queries[2]
+    assert "left(nsp.nspname, 3) <> 'pg_'" in connection.queries[3]
 
 
 def test_bad_schema_names():
@@ -150,7 +150,7 @@ def test_only_enabled_checks_run():
         connection, Settings(disable=("all",), enable=("invalid_index",))
     )
     assert report.checks == ("invalid_index",)
-    assert len(connection.queries) == 3
+    assert len(connection.queries) == 4
     report = run_checks(connection, enable=["btree_index_on_array"])
     assert "btree_index_on_array" in report.checks
 
@@ -198,3 +198,67 @@ def test_url_without_driver(monkeypatch):
     monkeypatch.setattr(runner, "_has_module", lambda name: False)
     with pytest.raises(ConfigError, match="no PostgreSQL driver"):
         run_checks("postgresql://localhost/x")
+
+
+def test_framework_tables_are_ignored_except_state_checks():
+    django = {
+        **FK_ROW,
+        "table_name": "auth_permission",
+        "table_ident": "public.auth_permission",
+    }
+    invalid = {
+        "schema_name": "public",
+        "table_name": "django_session",
+        "table_ident": "public.django_session",
+        "index_name": "django_session_expire_date_idx",
+        "index_ident": "public.django_session_expire_date_idx",
+        "schema_ident": "public",
+        "index_kind": "i",
+    }
+    markers = [{"schema_name": "public", "table_name": "django_migrations"}]
+    connection = FakeConnection(
+        {
+            "foreign_key_without_index": [django, FK_ROW],
+            "invalid_index": [invalid],
+            "framework_markers": markers,
+        }
+    )
+    report = run_checks(connection)
+    assert [f.table for f in report.findings] == ["orders", "django_session"]
+    [ignored] = report.ignored
+    assert ignored.finding.table == "auth_permission"
+    assert ignored.reason.startswith("framework-owned table (django.contrib.auth)")
+    assert ignored.source == "built-in (ignore_framework_tables)"
+    assert json.loads(report.to_json())["ignored"][0]["source"] == ignored.source
+
+    report = run_checks(connection, ignore_framework_tables=False)
+    assert len(report.findings) == 3 and not report.ignored
+    report = run_checks(connection, ignore_framework_tables=["alembic"])
+    assert len(report.findings) == 3
+
+
+def test_django_tables_need_django_migrations_in_the_same_schema():
+    # a Flask application's own auth_user is checked
+    flask = {**FK_ROW, "table_name": "auth_user", "table_ident": "public.auth_user"}
+    report = run_checks(FakeConnection({"foreign_key_without_index": [flask]}))
+    assert len(report.findings) == 1
+    other_schema = [{"schema_name": "legacy", "table_name": "django_migrations"}]
+    report = run_checks(
+        FakeConnection(
+            {"foreign_key_without_index": [flask], "framework_markers": other_schema}
+        )
+    )
+    assert len(report.findings) == 1
+
+
+def test_a_configured_ignore_comes_first():
+    django = {
+        **FK_ROW,
+        "table_name": "auth_permission",
+        "table_ident": "public.auth_permission",
+    }
+    report = run_checks(
+        FakeConnection({"foreign_key_without_index": [django]}),
+        ignore=[Ignore("*", "public.auth_*", "ours", source="here")],
+    )
+    assert [(i.reason, i.source) for i in report.ignored] == [("ours", "here")]

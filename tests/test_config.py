@@ -5,9 +5,11 @@ from pytest_pghealth.config import (
     ConfigError,
     Ignore,
     Settings,
+    describe,
     load_pyproject,
     parse_table,
 )
+from pytest_pghealth.frameworks import bind, framework_ignores
 
 DEFAULT = tuple(name for name, check in CHECKS.items() if check.default)
 
@@ -137,3 +139,91 @@ def test_load_pyproject(tmp_path):
     path.write_text("[tool.pghealth\n")
     with pytest.raises(ConfigError):
         load_pyproject(path)
+
+
+def test_ignore_framework_tables():
+    assert Settings().ignore_framework_tables is True
+    off = parse_table({"ignore_framework_tables": False})
+    assert off.ignore_framework_tables is False
+    settings = parse_table({"ignore_framework_tables": ["alembic", "django-taggit"]})
+    assert [
+        i.tables.package for i in framework_ignores(settings.ignore_framework_tables)
+    ] == ["django-taggit", "alembic"]
+    assert framework_ignores(False) == ()
+    with pytest.raises(ConfigError, match="unknown package"):
+        parse_table({"ignore_framework_tables": ["rails"]})
+    with pytest.raises(ConfigError, match="non-empty strings"):
+        parse_table({"ignore_framework_tables": 1})
+    with pytest.raises(ConfigError, match="empty list"):
+        parse_table({"ignore_framework_tables": []})
+
+
+@pytest.mark.parametrize(
+    ("check", "table", "skipped"),
+    [
+        ("int4_primary_key", "auth_permission", True),
+        ("overlapping_index", "django_celery_beat_periodictask", True),
+        ("json_column", "wagtailcore_page", True),
+        ("int4_primary_key", "alembic_version", True),
+        ("invalid_index", "auth_permission", False),
+        ("sequence_near_overflow", "django_admin_log", False),
+        ("int4_primary_key", "auth_tokens", False),
+        ("int4_primary_key", "wagtail_extras_thing", False),
+        ("int4_primary_key", "orders", False),
+    ],
+)
+def test_framework_ignore_matching(check, table, skipped):
+    ignores = bind(framework_ignores(True), {("app", "django_migrations")})
+    found = Finding(check, "app", table, None, "m", "f")
+    assert any(i.matches(found) for i in ignores) is skipped
+    # without django_migrations in that schema, only the non-Django packages apply
+    elsewhere = Finding(check, "other", table, None, "m", "f")
+    assert any(i.matches(elsewhere) for i in ignores) is (
+        skipped and table == "alembic_version"
+    )
+
+
+def test_override_ignores_have_no_file():
+    [ignore] = Settings().with_overrides(ignore=[{"object": "a", "reason": "r"}]).ignore
+    assert ignore.source == ""
+    assert "from code (an override)" in describe(Settings(ignore=(ignore,)))
+
+
+def test_ignore_source(tmp_path):
+    path = tmp_path / "pyproject.toml"
+    path.write_text(
+        "[[tool.pghealth.ignore]]\nobject = 'public.a'\nreason = 'r'\n"
+        "[[tool.pghealth.ignore]]\nobject = 'public.b'\nreason = 'r'\n"
+    )
+    first, second = load_pyproject(path).ignore
+    assert first.source == f"{path}: ignore #1"
+    assert second.source == f"{path}: ignore #2"
+    assert first == Ignore("*", "public.a", "r")  # the source is not compared
+
+
+def test_describe():
+    text = describe(
+        Settings(
+            ignore=(
+                Ignore(
+                    "duplicate_index",
+                    "public.t",
+                    "legacy",
+                    source="pyproject.toml: ignore #1",
+                ),
+            ),
+            ignore_framework_tables=("alembic",),
+        )
+    )
+    assert (
+        "ignores (1):\n  check duplicate_index, object public.t: legacy\n    from pyproject.toml: ignore #1"
+        in text
+    )
+    assert "except invalid_index and sequence_near_overflow" in text
+    assert text.endswith("  alembic: alembic_version")
+    assert "django.contrib.auth" not in text
+    full = describe(Settings())
+    assert "auth_user_user_permissions (where django_migrations exists)" in full
+    text = describe(Settings(ignore_framework_tables=False))
+    assert "ignores: none" in text
+    assert "framework-owned tables: reported" in text

@@ -128,11 +128,15 @@ jobs:
         env:
           PROJECT: ${{ matrix.project }}
         run: |
+          set -euo pipefail
           uv sync
           url=postgresql+pg8000://postgres:pg@localhost:5432/project
           # Prefect's own URL uses asyncpg: check through it, as a user would
           if [ "$PROJECT" = prefect ]; then url=postgresql+asyncpg://postgres:pg@localhost:5432/project; fi
           uv run --no-sync python scripts/realworld.py "$PROJECT" "$url" realworld-out
+          # the same database through the read-only CLI, as against staging
+          uv run --no-sync pghealth "$url" --no-config --enable all --warn \
+            --json "realworld-out/$PROJECT.cli.json" | tail -n 1
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:

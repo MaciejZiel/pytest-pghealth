@@ -2,7 +2,8 @@
 
 Used by .github/workflows/realworld.yml: python scripts/realworld.py NAME URL OUTDIR.
 Writes OUTDIR/NAME.json and OUTDIR/NAME.txt, prints the report, and adds a
-per-check count to the GitHub step summary. Findings do not fail it (they
+per-check count of findings and of findings ignored on framework-owned
+tables (the default) to the GitHub step summary. Findings do not fail it (they
 are material for review, not a verdict); a check run that cannot connect
 does, after writing the error to OUTDIR/NAME.txt.
 """
@@ -33,14 +34,26 @@ def main() -> None:
     (out_dir / f"{name}.txt").write_text(text + "\n", encoding="utf-8")
     print(text)
     counts = collections.Counter(f.check for f in report.findings)
+    # run_checks reads no pyproject.toml, so every ignored finding is on a
+    # framework-owned table; count them by package
+    ignored = collections.Counter(i.finding.check for i in report.ignored)
+    owners = collections.Counter(
+        i.reason.partition("(")[2].partition(")")[0] or i.reason for i in report.ignored
+    )
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as stream:
             stream.write(
-                f"### {name}\n\n{report.summary()}\n\n| check | findings |\n|---|---|\n"
+                f"### {name}\n\n{report.summary()}\n\n"
+                "| check | findings | ignored (framework-owned) |\n|---|---|---|\n"
             )
             stream.writelines(
-                f"| {check} | {counts.get(check, 0)} |\n" for check in report.checks
+                f"| {check} | {counts.get(check, 0)} | {ignored.get(check, 0)} |\n"
+                for check in report.checks
+            )
+            stream.writelines(
+                f"\n{count} ignored on tables of {package}\n"
+                for package, count in sorted(owners.items())
             )
             stream.writelines(
                 f"\nfailed: {error.check}: {error.error}\n" for error in report.errors

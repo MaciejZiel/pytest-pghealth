@@ -13,8 +13,14 @@ from contextlib import contextmanager
 from typing import Any
 
 from pytest_pghealth.checks import CHECKS
-from pytest_pghealth.config import ConfigError, Settings
+from pytest_pghealth.config import ConfigError, Ignore, Settings
 from pytest_pghealth.findings import CheckError, IgnoredFinding, Report
+from pytest_pghealth.frameworks import (
+    FrameworkIgnore,
+    bind,
+    framework_ignores,
+    required_tables,
+)
 
 Fetch = Callable[[str], list[dict[str, Any]]]
 
@@ -25,57 +31,89 @@ def run_checks(
     """Run the enabled checks against ``target`` and return the report.
 
     ``overrides`` replace fields of ``settings`` (``enable``, ``disable``,
-    ``schemas``, ``ignore``, ``sequence_remaining_percent``).
+    ``schemas``, ``ignore``, ``ignore_framework_tables``,
+    ``sequence_remaining_percent``).
     """
     settings = (settings or Settings()).with_overrides(**overrides)
-    schema_filter = _schema_filter(settings.schemas)
     with connect(target) as fetch:
-        version = fetch(
-            "select current_setting('server_version') as version, "
-            "current_setting('server_version_num')::int as version_num"
-        )[0]
-        replacements = {
-            "{schema_filter}": schema_filter,
-            "{remaining_percent}": f"{settings.sequence_remaining_percent:.4f}",
-            "{nulls_not_distinct}": (
-                "pi.indnullsnotdistinct"
-                if int(version["version_num"]) >= 150000
-                else "false"
-            ),
-        }
-        report = Report(
-            server_version=str(version["version"]).split(" ", 1)[0],
-            schemas=settings.schemas,
-            checks=settings.checks,
-        )
-        savepoints = _savepoints_work(fetch)
-        for name in settings.checks:
-            check = CHECKS[name]
-            sql = check.sql()
-            for placeholder, value in replacements.items():
-                sql = sql.replace(placeholder, value)
-            try:
-                if savepoints:
-                    fetch("savepoint pghealth_check")
-                rows = fetch(sql)
-            except Exception as error:  # noqa: BLE001 - reported per check, the others still run
-                report.errors.append(CheckError(name, _one_line(error)))
-                if savepoints:
-                    # the failed query aborted the caller's transaction: undo
-                    # just this check, so the next one and the caller go on
-                    fetch("rollback to savepoint pghealth_check")
-                    fetch("release savepoint pghealth_check")
-                continue
+        return run_with(fetch, settings)
+
+
+def run_with(fetch: Fetch, settings: Settings) -> Report:
+    """Run the enabled checks through ``fetch`` (see :func:`connect`)."""
+    schema_filter = _schema_filter(settings.schemas)
+    version = fetch(
+        "select current_setting('server_version') as version, "
+        "current_setting('server_version_num')::int as version_num"
+    )[0]
+    replacements = {
+        "{schema_filter}": schema_filter,
+        "{remaining_percent}": f"{settings.sequence_remaining_percent:.4f}",
+        "{nulls_not_distinct}": (
+            "pi.indnullsnotdistinct"
+            if int(version["version_num"]) >= 150000
+            else "false"
+        ),
+    }
+    report = Report(
+        server_version=str(version["version"]).split(" ", 1)[0],
+        schemas=settings.schemas,
+        checks=settings.checks,
+    )
+    ignores: tuple[Ignore | FrameworkIgnore, ...] = (
+        *settings.ignore,
+        *_framework_ignores(fetch, settings, schema_filter),
+    )
+    savepoints = _savepoints_work(fetch)
+    for name in settings.checks:
+        check = CHECKS[name]
+        sql = check.sql()
+        for placeholder, value in replacements.items():
+            sql = sql.replace(placeholder, value)
+        try:
             if savepoints:
+                fetch("savepoint pghealth_check")
+            rows = fetch(sql)
+        except Exception as error:  # noqa: BLE001 - reported per check, the others still run
+            report.errors.append(CheckError(name, _one_line(error)))
+            if savepoints:
+                # the failed query aborted the caller's transaction: undo
+                # just this check, so the next one and the caller go on
+                fetch("rollback to savepoint pghealth_check")
                 fetch("release savepoint pghealth_check")
-            for row in rows:
-                finding = check.build(row)
-                ignore = next((i for i in settings.ignore if i.matches(finding)), None)
-                if ignore is None:
-                    report.findings.append(finding)
-                else:
-                    report.ignored.append(IgnoredFinding(finding, ignore.reason))
+            continue
+        if savepoints:
+            fetch("release savepoint pghealth_check")
+        for row in rows:
+            finding = check.build(row)
+            ignore = next((i for i in ignores if i.matches(finding)), None)
+            if ignore is None:
+                report.findings.append(finding)
+            else:
+                report.ignored.append(
+                    IgnoredFinding(finding, ignore.reason, ignore.source)
+                )
     return report
+
+
+def _framework_ignores(
+    fetch: Fetch, settings: Settings, schema_filter: str
+) -> tuple[FrameworkIgnore, ...]:
+    """The built-in framework ignores, bound to the schemas they apply to."""
+    ignores = framework_ignores(settings.ignore_framework_tables)
+    required = required_tables(ignores)
+    if not required:
+        return ignores
+    rows = fetch(
+        "-- pghealth: framework_markers\n"
+        "select nsp.nspname::text as schema_name, pc.relname::text as table_name\n"
+        "from pg_catalog.pg_class pc\n"
+        "inner join pg_catalog.pg_namespace nsp on nsp.oid = pc.relnamespace\n"
+        "where pc.relkind in ('r', 'p') and "
+        f"pc.relname in ({', '.join(_literal(name) for name in required)}) and "
+        f"{schema_filter}"
+    )
+    return bind(ignores, {(row["schema_name"], row["table_name"]) for row in rows})
 
 
 def _savepoints_work(fetch: Fetch) -> bool:
@@ -98,8 +136,9 @@ def _one_line(error: BaseException) -> str:
 
 
 def _literal(value: str) -> str:
+    """A SQL string literal; backslashes and NUL are refused, not escaped."""
     if "\\" in value or "\x00" in value:
-        raise ConfigError(f"schema name {value!r} contains a backslash or NUL")
+        raise ConfigError(f"{value!r} contains a backslash or NUL")
     return "'" + value.replace("'", "''") + "'"
 
 
