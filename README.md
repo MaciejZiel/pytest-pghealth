@@ -201,16 +201,18 @@ same column, which `overlapping_index` reports and names the foreign key
 The checks ran against the migrated schemas of four open-source projects;
 every finding was read and classified ([details](docs/real-projects.md)):
 
-| Project | Findings | True | Debatable | False positive |
-|---|---|---|---|---|
-| full-stack-fastapi-template (SQLModel) | 1 | 1 | 0 | 0 |
-| Prefect 3.9.3 (SQLAlchemy) | 26 | 22 | 4 | 0 |
-| NetBox (Django) | 217 | 168 | 49 | 0 |
-| Wagtail 8.1 (Django) | 69 | 27 | 42 | 0 |
+| Project | Findings | True | Debatable | False positive | Skipped (framework-owned) |
+|---|---|---|---|---|---|
+| full-stack-fastapi-template (SQLModel) | 1 | 1 | 0 | 0 | 0 |
+| Prefect 3.9.3 (SQLAlchemy) | 31 | 27 | 4 | 0 | 0 |
+| NetBox (Django) | 208 | 164 | 44 | 0 | 9 |
+| Wagtail 8.1 (Django) | 0 | 0 | 0 | 0 | 69 |
 
 The FastAPI template's `item.owner_id` has no index, so deleting a user
-scans every item; Prefect has nine unindexed foreign keys, a duplicate index
-and twelve redundant ones. "Debatable" findings are right about the catalog
+scans every item; Prefect has nine unindexed foreign keys, a duplicate index,
+twelve redundant ones and five `json` columns. A new Wagtail site has nothing
+of its own to report: all 69 findings of 0.2.0 were on Wagtail's and
+Django's own tables. "Debatable" findings are right about the catalog
 but may be intended: NULL meaning "not applicable" in a unique constraint,
 `integer` keys on small lookup tables.
 
