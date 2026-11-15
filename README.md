@@ -160,8 +160,29 @@ reported.
 
 Django note: Django indexes foreign keys by itself, so
 `foreign_key_without_index` mostly catches `db_index=False` and raw SQL
-migrations there; the index, primary key, `int4` and constraint checks apply
-as they are.
+migrations there. What Django schemas do have is the reverse: a
+per-`ForeignKey` index next to a unique constraint that starts with the
+same column, which `overlapping_index` reports and names the foreign key
+(`db_index=False` removes it). Tables from `django.contrib` and other apps
+can be ignored by pattern; see [configuration](docs/configuration.md#ignores).
+
+## On real projects
+
+The checks ran against the migrated schemas of four open-source projects;
+every finding was read and classified ([details](docs/real-projects.md)):
+
+| Project | Findings | True | Debatable | False positive |
+|---|---|---|---|---|
+| full-stack-fastapi-template (SQLModel) | 1 | 1 | 0 | 0 |
+| Prefect 3.9.3 (SQLAlchemy) | 26 | 22 | 4 | 0 |
+| NetBox (Django) | 217 | 168 | 49 | 0 |
+| Wagtail 8.1 (Django) | 69 | 27 | 42 | 0 |
+
+The FastAPI template's `item.owner_id` has no index, so deleting a user
+scans every item; Prefect has nine unindexed foreign keys, a duplicate index
+and twelve redundant ones. "Debatable" findings are right about the catalog
+but may be intended: NULL meaning "not applicable" in a unique constraint,
+`integer` keys on small lookup tables.
 
 ## Configuration
 
@@ -208,9 +229,30 @@ squawk asks "is this migration safe to run?", pytest-pghealth asks "is the
 schema it produces sound?". Production-only checks (bloat, unused indexes)
 are left out on purpose: on a test database their numbers mean nothing.
 
-It pairs with [pytest-queryguard](https://github.com/MaciejZiel/pytest-queryguard),
-which watches the queries your tests run (N+1, query budgets); pytest-pghealth
-watches the schema they run against.
+## Pairs with pytest-queryguard
+
+[pytest-queryguard](https://github.com/MaciejZiel/pytest-queryguard) watches
+the queries your tests send: N+1 lazy loads, repeated statements, query
+budgets, and (opt-in) filters no index can serve. pytest-pghealth watches the
+schema those queries run against. Neither sees what the other does: an
+unindexed foreign key costs nothing in a test that never deletes a parent,
+and an N+1 loop looks fine to the catalog.
+
+Both run in the same pytest session, against the same test database, with
+no code changes beyond configuration:
+
+```toml
+[tool.pytest.ini_options]
+addopts = "--pghealth"          # schema checked once, at the end of the run
+
+[tool.pghealth]
+fixture = "engine"              # the session-scoped engine your tests use
+```
+
+pytest-queryguard needs no configuration for its default checks; its
+missing-index check and pytest-pghealth's `foreign_key_without_index`
+overlap only in spirit: one looks at the queries that ran, the other at
+foreign keys whatever the tests ran.
 
 ## Credits
 

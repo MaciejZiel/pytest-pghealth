@@ -88,6 +88,27 @@ reason = "append-only; parents are never deleted"
 Ignored findings do not fail the run; the summary counts them and the JSON
 report lists them with their reasons.
 
+Tables that come from another package are a common case. In a Django
+project, `django.contrib` and third-party apps bring their own tables, with
+`integer` keys and per-`ForeignKey` indexes you cannot change from your
+code:
+
+```toml
+[[tool.pghealth.ignore]]
+check = "int4_primary_key"
+object = "public.auth_*"
+reason = "django.contrib.auth: not ours to migrate"
+
+[[tool.pghealth.ignore]]
+check = "int4_primary_key"
+object = "public.django_content_type"
+reason = "django.contrib.contenttypes: not ours to migrate"
+```
+
+Keep such ignores narrow: name the check, and the tables as exactly as you
+can. `*` matches any characters, dots included, so `public.auth_*` also
+matches a table of your own called `auth_tokens`.
+
 ## JSON report
 
 `--pghealth-json PATH` (or `json`) writes the session check's report, relative

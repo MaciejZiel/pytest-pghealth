@@ -93,6 +93,12 @@ def _overlapping_index(row: Row) -> Finding:
             f"Index {row['index_name']} is a leading prefix of "
             f"{row['covering_index_name']}, which serves the same lookups; "
             "the shorter index only adds write cost."
+            + (
+                f" Its columns are those of foreign key {row['foreign_key_name']}, "
+                f"which {row['covering_index_name']} covers as well."
+                if row.get("foreign_key_name")
+                else ""
+            )
         ),
         fix=f"DROP INDEX{_concurrently(row['index_kind'])} {row['index_ident']};",
     )
