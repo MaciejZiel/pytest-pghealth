@@ -26,8 +26,24 @@ class FakeCursor:
             self.connection.savepoint_log.append(sql)
             self.description = None
             return
+        if sql.startswith("set "):
+            self.connection.settings.append(sql)
+            if sql == "set default_transaction_read_only = on":
+                # takes effect from the next transaction
+                self.connection.default_read_only = not self.connection.refuse_read_only
+            elif sql == "set transaction read only":
+                self.connection.transaction_read_only = (
+                    not self.connection.refuse_read_only
+                )
+            self.description = None
+            return
         match = _CHECK.search(sql)
-        if match is None:
+        if "transaction_read_only" in sql:
+            read_only = self.connection.transaction_read_only or (
+                not self.connection.in_transaction and self.connection.default_read_only
+            )
+            rows = [{"read_only": "on" if read_only else "off"}]
+        elif match is None:
             rows = [
                 {
                     "version": self.connection.version,
@@ -59,8 +75,13 @@ class FakeConnection:
         version_num: int = 180001,
         failing: tuple[str, ...] = (),
         in_transaction: bool = False,
+        refuse_read_only: bool = False,
     ) -> None:
         self.in_transaction = in_transaction
+        self.refuse_read_only = refuse_read_only
+        self.default_read_only = False
+        self.transaction_read_only = False
+        self.settings: list[str] = []
         self.savepoint_log: list[str] = []
         self.rows = rows or {}
         self.version = version

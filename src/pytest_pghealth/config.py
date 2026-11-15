@@ -5,12 +5,18 @@ from __future__ import annotations
 import fnmatch
 import tomllib
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from pytest_pghealth.checks import CHECKS
 from pytest_pghealth.findings import Finding
+from pytest_pghealth.frameworks import (
+    FRAMEWORK_PACKAGES,
+    STATE_CHECKS,
+    FrameworkIgnore,
+    framework_ignores,
+)
 
 DEFAULT_REMAINING_PERCENT = 20.0
 
@@ -26,12 +32,14 @@ class Ignore:
     ``check`` and ``object`` are shell-style patterns (``*``, ``?``, ``[ab]``).
     ``object`` matches a finding's target (``schema.table.object``) or its
     table (``schema.table``), so ``public.audit_log`` accepts every finding
-    of that table.
+    of that table. ``source`` says where the ignore was defined; it does not
+    take part in matching or comparison.
     """
 
     check: str
     object: str
     reason: str
+    source: str = field(default="", compare=False)
 
     def matches(self, finding: Finding) -> bool:
         if not fnmatch.fnmatchcase(finding.check, self.check):
@@ -41,19 +49,25 @@ class Ignore:
             fnmatch.fnmatchcase(table, self.object)
         )
 
+    def describe(self) -> str:
+        return f"check {self.check}, object {self.object}: {self.reason}"
+
 
 @dataclass(frozen=True)
 class Settings:
     """What to check and how to report it.
 
     ``schemas`` of ``None`` means every schema except PostgreSQL's own
-    (``pg_*`` and ``information_schema``).
+    (``pg_*`` and ``information_schema``). ``ignore_framework_tables`` is
+    ``True`` (every package in :data:`~pytest_pghealth.frameworks.FRAMEWORK_TABLES`),
+    ``False``, or the names of the packages whose tables are skipped.
     """
 
     enable: tuple[str, ...] = ()
     disable: tuple[str, ...] = ()
     schemas: tuple[str, ...] | None = None
     ignore: tuple[Ignore, ...] = ()
+    ignore_framework_tables: bool | tuple[str, ...] = True
     sequence_remaining_percent: float = DEFAULT_REMAINING_PERCENT
     # The session check (plugin only).
     session: bool = False
@@ -76,6 +90,11 @@ class Settings:
         enabled -= set(self.disable) - {"all"}
         return tuple(name for name in CHECKS if name in enabled)
 
+    @property
+    def active_ignores(self) -> tuple[Ignore | FrameworkIgnore, ...]:
+        """The configured ignores, then the built-in framework ones."""
+        return (*self.ignore, *framework_ignores(self.ignore_framework_tables))
+
     def with_overrides(self, **overrides: Any) -> Settings:
         """A copy with the given fields replaced; ``None`` values are skipped."""
         given = {key: value for key, value in overrides.items() if value is not None}
@@ -90,6 +109,10 @@ class Settings:
             )
         if "ignore" in given:
             given["ignore"] = tuple(_ignores(given["ignore"]))
+        if "ignore_framework_tables" in given:
+            given["ignore_framework_tables"] = _framework_tables(
+                given["ignore_framework_tables"]
+            )
         return replace(self, **given)
 
 
@@ -98,6 +121,7 @@ _KEYS = {
     "disable",
     "schemas",
     "ignore",
+    "ignore_framework_tables",
     "sequence_remaining_percent",
     "session",
     "url",
@@ -121,13 +145,16 @@ def load_pyproject(path: Path) -> Settings:
     if table is None:
         return Settings()
     try:
-        return parse_table(table)
+        return parse_table(table, source=str(path))
     except ConfigError as error:
         raise ConfigError(f"{path}: [tool.pghealth]: {error}") from error
 
 
-def parse_table(table: Mapping[str, Any]) -> Settings:
-    """Settings from a ``[tool.pghealth]``-shaped mapping."""
+def parse_table(table: Mapping[str, Any], source: str = "") -> Settings:
+    """Settings from a ``[tool.pghealth]``-shaped mapping.
+
+    ``source`` (the file it came from) is recorded on each ignore.
+    """
     if not isinstance(table, Mapping):
         raise ConfigError("must be a table")
     unknown = sorted(set(table) - _KEYS)
@@ -142,7 +169,11 @@ def parse_table(table: Mapping[str, Any]) -> Settings:
     if "schemas" in table:
         values["schemas"] = tuple(_strings(table["schemas"], "schemas"))
     if "ignore" in table:
-        values["ignore"] = tuple(_ignores(table["ignore"]))
+        values["ignore"] = tuple(_ignores(table["ignore"], source))
+    if "ignore_framework_tables" in table:
+        values["ignore_framework_tables"] = _framework_tables(
+            table["ignore_framework_tables"]
+        )
     if "sequence_remaining_percent" in table:
         values["sequence_remaining_percent"] = _percent(
             table["sequence_remaining_percent"]
@@ -158,6 +189,40 @@ def parse_table(table: Mapping[str, Any]) -> Settings:
                 raise ConfigError(f"{key} must be a non-empty string")
             values[key] = table[key]
     return Settings(**values)
+
+
+def describe(settings: Settings) -> str:
+    """The checks (on or off) and the active ignores with where each comes from."""
+    enabled = set(settings.checks)
+    width = max(len(name) for name in CHECKS)
+    lines = ["pghealth checks (on: runs with this configuration)"]
+    for name, check in CHECKS.items():
+        state = "on " if name in enabled else "off"
+        lines.append(f"  {state}  {name:<{width}}  {check.summary}")
+    lines.append("")
+    if settings.ignore:
+        lines.append(f"ignores ({len(settings.ignore)}):")
+        for ignore in settings.ignore:
+            lines.append(f"  {ignore.describe()}")
+            lines.append(f"    from {ignore.source or 'code (an override)'}")
+    else:
+        lines.append("ignores: none")
+    framework = framework_ignores(settings.ignore_framework_tables)
+    lines.append("")
+    if framework:
+        lines.append(
+            "framework-owned tables, skipped by every check except "
+            f"{' and '.join(sorted(STATE_CHECKS))}"
+        )
+        lines.append(
+            "  from the built-in list (ignore_framework_tables = false to report them):"
+        )
+        lines.extend(f"  {ignore.describe()}" for ignore in framework)
+    else:
+        lines.append(
+            "framework-owned tables: reported (ignore_framework_tables = false)"
+        )
+    return "\n".join(lines)
 
 
 def split_names(value: str) -> list[str]:
@@ -195,7 +260,20 @@ def _percent(value: Any) -> float:
     return float(value)
 
 
-def _ignores(value: Any) -> list[Ignore]:
+def _framework_tables(value: Any) -> bool | tuple[str, ...]:
+    if isinstance(value, bool):
+        return value
+    names = _strings(value, "ignore_framework_tables")
+    unknown = [name for name in names if name not in FRAMEWORK_PACKAGES]
+    if unknown:
+        raise ConfigError(
+            f"ignore_framework_tables: unknown package(s) {', '.join(unknown)}; "
+            f"known: {', '.join(FRAMEWORK_PACKAGES)}"
+        )
+    return tuple(names)
+
+
+def _ignores(value: Any, source: str = "") -> list[Ignore]:
     if isinstance(value, (Ignore, Mapping)):
         value = [value]
     if not isinstance(value, Iterable) or isinstance(value, str):
@@ -225,7 +303,10 @@ def _ignores(value: Any) -> list[Ignore]:
             raise ConfigError(
                 f"ignore #{position}: unknown check {check!r}; known: {', '.join(CHECKS)}"
             )
-        ignores.append(Ignore(check=check, object=target, reason=reason.strip()))
+        where = f"{source}: ignore #{position}" if source else f"ignore #{position}"
+        ignores.append(
+            Ignore(check=check, object=target, reason=reason.strip(), source=where)
+        )
     return ignores
 
 
@@ -234,6 +315,7 @@ __all__ = [
     "ConfigError",
     "Ignore",
     "Settings",
+    "describe",
     "load_pyproject",
     "parse_table",
     "split_names",

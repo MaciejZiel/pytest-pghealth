@@ -13,12 +13,12 @@ def test_clean_database():
     assert report.ok
     assert report.server_version == "18.1"
     assert (
-        report.summary() == "PostgreSQL 18.1, all user schemas: 11 checks, 0 problems"
+        report.summary() == "PostgreSQL 18.1, all user schemas: 13 checks, 0 problems"
     )
     # the version, the savepoint probe, then one query per check, each on
     # its own cursor
-    assert len(connection.queries) == 13
-    assert connection.closed_cursors == 13
+    assert len(connection.queries) == 15
+    assert connection.closed_cursors == 15
 
 
 def test_findings_and_ignores():
@@ -198,3 +198,48 @@ def test_url_without_driver(monkeypatch):
     monkeypatch.setattr(runner, "_has_module", lambda name: False)
     with pytest.raises(ConfigError, match="no PostgreSQL driver"):
         run_checks("postgresql://localhost/x")
+
+
+def test_framework_tables_are_ignored_except_state_checks():
+    django = {
+        **FK_ROW,
+        "table_name": "auth_permission",
+        "table_ident": "public.auth_permission",
+    }
+    invalid = {
+        "schema_name": "public",
+        "table_name": "django_session",
+        "table_ident": "public.django_session",
+        "index_name": "django_session_expire_date_idx",
+        "index_ident": "public.django_session_expire_date_idx",
+        "schema_ident": "public",
+        "index_kind": "i",
+    }
+    connection = FakeConnection(
+        {"foreign_key_without_index": [django, FK_ROW], "invalid_index": [invalid]}
+    )
+    report = run_checks(connection)
+    assert [f.table for f in report.findings] == ["orders", "django_session"]
+    [ignored] = report.ignored
+    assert ignored.finding.table == "auth_permission"
+    assert ignored.reason.startswith("framework-owned table (django.contrib.auth)")
+    assert ignored.source == "built-in (ignore_framework_tables)"
+    assert json.loads(report.to_json())["ignored"][0]["source"] == ignored.source
+
+    report = run_checks(connection, ignore_framework_tables=False)
+    assert len(report.findings) == 3 and not report.ignored
+    report = run_checks(connection, ignore_framework_tables=["alembic"])
+    assert len(report.findings) == 3
+
+
+def test_a_configured_ignore_comes_first():
+    django = {
+        **FK_ROW,
+        "table_name": "auth_permission",
+        "table_ident": "public.auth_permission",
+    }
+    report = run_checks(
+        FakeConnection({"foreign_key_without_index": [django]}),
+        ignore=[Ignore("*", "public.auth_*", "ours", source="here")],
+    )
+    assert [(i.reason, i.source) for i in report.ignored] == [("ours", "here")]

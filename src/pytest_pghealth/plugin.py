@@ -10,8 +10,13 @@ from typing import Any
 
 import pytest
 
-from pytest_pghealth.checks import CHECKS
-from pytest_pghealth.config import ConfigError, Settings, load_pyproject, split_names
+from pytest_pghealth.config import (
+    ConfigError,
+    Settings,
+    describe,
+    load_pyproject,
+    split_names,
+)
 from pytest_pghealth.findings import Report
 from pytest_pghealth.runner import run_checks
 
@@ -51,7 +56,8 @@ class PgHealth:
     Both methods take the target to check (a URL, a SQLAlchemy engine,
     connection or session, a Django connection, or a DB-API connection) and
     keyword overrides of the project settings: ``enable``, ``disable``,
-    ``schemas``, ``ignore`` and ``sequence_remaining_percent``.
+    ``schemas``, ``ignore``, ``ignore_framework_tables`` and
+    ``sequence_remaining_percent``.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -453,12 +459,7 @@ def pytest_cmdline_main(config: pytest.Config) -> int | None:
         settings = _settings_from(config)
     except ConfigError as error:
         raise pytest.UsageError(f"pytest-pghealth: {error}") from error
-    enabled = set(settings.checks)
-    width = max(len(name) for name in CHECKS)
-    print("pghealth checks (on: runs with this configuration)")
-    for name, check in CHECKS.items():
-        state = "on " if name in enabled else "off"
-        print(f"  {state}  {name:<{width}}  {check.summary}")
+    print(describe(settings))
     return 0
 
 

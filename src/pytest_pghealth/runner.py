@@ -25,56 +25,65 @@ def run_checks(
     """Run the enabled checks against ``target`` and return the report.
 
     ``overrides`` replace fields of ``settings`` (``enable``, ``disable``,
-    ``schemas``, ``ignore``, ``sequence_remaining_percent``).
+    ``schemas``, ``ignore``, ``ignore_framework_tables``,
+    ``sequence_remaining_percent``).
     """
     settings = (settings or Settings()).with_overrides(**overrides)
-    schema_filter = _schema_filter(settings.schemas)
     with connect(target) as fetch:
-        version = fetch(
-            "select current_setting('server_version') as version, "
-            "current_setting('server_version_num')::int as version_num"
-        )[0]
-        replacements = {
-            "{schema_filter}": schema_filter,
-            "{remaining_percent}": f"{settings.sequence_remaining_percent:.4f}",
-            "{nulls_not_distinct}": (
-                "pi.indnullsnotdistinct"
-                if int(version["version_num"]) >= 150000
-                else "false"
-            ),
-        }
-        report = Report(
-            server_version=str(version["version"]).split(" ", 1)[0],
-            schemas=settings.schemas,
-            checks=settings.checks,
-        )
-        savepoints = _savepoints_work(fetch)
-        for name in settings.checks:
-            check = CHECKS[name]
-            sql = check.sql()
-            for placeholder, value in replacements.items():
-                sql = sql.replace(placeholder, value)
-            try:
-                if savepoints:
-                    fetch("savepoint pghealth_check")
-                rows = fetch(sql)
-            except Exception as error:  # noqa: BLE001 - reported per check, the others still run
-                report.errors.append(CheckError(name, _one_line(error)))
-                if savepoints:
-                    # the failed query aborted the caller's transaction: undo
-                    # just this check, so the next one and the caller go on
-                    fetch("rollback to savepoint pghealth_check")
-                    fetch("release savepoint pghealth_check")
-                continue
+        return run_with(fetch, settings)
+
+
+def run_with(fetch: Fetch, settings: Settings) -> Report:
+    """Run the enabled checks through ``fetch`` (see :func:`connect`)."""
+    schema_filter = _schema_filter(settings.schemas)
+    version = fetch(
+        "select current_setting('server_version') as version, "
+        "current_setting('server_version_num')::int as version_num"
+    )[0]
+    replacements = {
+        "{schema_filter}": schema_filter,
+        "{remaining_percent}": f"{settings.sequence_remaining_percent:.4f}",
+        "{nulls_not_distinct}": (
+            "pi.indnullsnotdistinct"
+            if int(version["version_num"]) >= 150000
+            else "false"
+        ),
+    }
+    report = Report(
+        server_version=str(version["version"]).split(" ", 1)[0],
+        schemas=settings.schemas,
+        checks=settings.checks,
+    )
+    ignores = settings.active_ignores
+    savepoints = _savepoints_work(fetch)
+    for name in settings.checks:
+        check = CHECKS[name]
+        sql = check.sql()
+        for placeholder, value in replacements.items():
+            sql = sql.replace(placeholder, value)
+        try:
             if savepoints:
+                fetch("savepoint pghealth_check")
+            rows = fetch(sql)
+        except Exception as error:  # noqa: BLE001 - reported per check, the others still run
+            report.errors.append(CheckError(name, _one_line(error)))
+            if savepoints:
+                # the failed query aborted the caller's transaction: undo
+                # just this check, so the next one and the caller go on
+                fetch("rollback to savepoint pghealth_check")
                 fetch("release savepoint pghealth_check")
-            for row in rows:
-                finding = check.build(row)
-                ignore = next((i for i in settings.ignore if i.matches(finding)), None)
-                if ignore is None:
-                    report.findings.append(finding)
-                else:
-                    report.ignored.append(IgnoredFinding(finding, ignore.reason))
+            continue
+        if savepoints:
+            fetch("release savepoint pghealth_check")
+        for row in rows:
+            finding = check.build(row)
+            ignore = next((i for i in ignores if i.matches(finding)), None)
+            if ignore is None:
+                report.findings.append(finding)
+            else:
+                report.ignored.append(
+                    IgnoredFinding(finding, ignore.reason, ignore.source)
+                )
     return report
 
 

@@ -46,11 +46,14 @@ class Finding:
 
 @dataclass(frozen=True)
 class IgnoredFinding:
+    """A finding an ignore accepted; ``source`` says where that ignore is defined."""
+
     finding: Finding
     reason: str
+    source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {**self.finding.to_dict(), "reason": self.reason}
+        return {**self.finding.to_dict(), "reason": self.reason, "source": self.source}
 
 
 @dataclass(frozen=True)
@@ -98,7 +101,8 @@ class Report:
             checks=tuple(data.get("checks", ())),
             findings=[finding(item) for item in data.get("findings", [])],
             ignored=[
-                IgnoredFinding(finding(i), i["reason"]) for i in data.get("ignored", [])
+                IgnoredFinding(finding(i), i["reason"], i.get("source", ""))
+                for i in data.get("ignored", [])
             ],
             errors=[CheckError(e["check"], e["error"]) for e in data.get("errors", [])],
         )
