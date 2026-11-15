@@ -1,0 +1,122 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pytest-pghealth"
+dynamic = ["version"]
+description = "PostgreSQL schema health checks in pytest: unindexed foreign keys, duplicate and invalid indexes, missing primary keys, int4 keys near overflow."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT AND Apache-2.0"
+license-files = ["LICENSE", "LICENSES/Apache-2.0.txt", "NOTICE"]
+authors = [{ name = "Maciej Zieliński" }]
+keywords = [
+    "pytest",
+    "postgresql",
+    "postgres",
+    "schema",
+    "lint",
+    "index",
+    "foreign-key",
+    "sqlalchemy",
+    "django",
+    "pytest-plugin",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Plugins",
+    "Framework :: Django",
+    "Framework :: Pytest",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Programming Language :: SQL",
+    "Topic :: Database",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
+dependencies = ["pytest>=8"]
+
+[project.optional-dependencies]
+sqlalchemy = ["sqlalchemy>=2.0"]
+
+[project.urls]
+Homepage = "https://github.com/MaciejZiel/pytest-pghealth"
+Repository = "https://github.com/MaciejZiel/pytest-pghealth"
+Changelog = "https://github.com/MaciejZiel/pytest-pghealth/blob/main/CHANGELOG.md"
+Issues = "https://github.com/MaciejZiel/pytest-pghealth/issues"
+
+[project.entry-points.pytest11]
+pghealth = "pytest_pghealth.plugin"
+
+[dependency-groups]
+dev = [
+    "coverage[toml]",
+    "mypy",
+    # PostgreSQL driver for the tests (BSD-3-Clause). psycopg and psycopg2 are
+    # LGPL, so not here: CI installs psycopg for the Django job only.
+    "pg8000>=1.31",
+    "ruff",
+    "sqlalchemy>=2.0",
+]
+# The Django integration tests (tests/django_project), run by one CI job.
+# Not in dev: pytest-django is a pytest plugin that every session would load.
+django = [
+    "django>=5.2",
+    "pytest-django>=4.11",
+]
+
+[tool.hatch.version]
+path = "src/pytest_pghealth/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "src",
+    "tests",
+    "docs",
+    "LICENSES",
+    "CHANGELOG.md",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "pyproject.toml",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pytest_pghealth"]
+
+[tool.uv]
+exclude-newer = "2026-11-01T00:00:00Z"
+default-groups = ["dev"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p pytester"
+
+[tool.ruff]
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+extend-select = ["I", "UP", "B", "BLE"]
+
+[tool.mypy]
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["django.*", "psycopg.*", "psycopg2.*"]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["pytest_pghealth"]
+
+[tool.coverage.report]
+show_missing = true

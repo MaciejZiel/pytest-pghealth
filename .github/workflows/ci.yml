@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# The repository is private, so Actions minutes are limited: a new push to a
+# pull request cancels the run for its previous head, and the matrix is
+# small (PostgreSQL 14 and 18 on the oldest Python, 18 on the newest).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: "3.13"
+      - run: uv sync
+      - run: uv run ruff check
+      - run: uv run ruff format --check
+      - run: uv run mypy src
+
+  # The unit tests and, against a PostgreSQL service container, tests/pg.
+  # PGHEALTH_REQUIRE_DB turns a missing database into a failure, so the job
+  # cannot pass by skipping the PostgreSQL tests.
+  test:
+    name: test (Python ${{ matrix.python }}, PostgreSQL ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { python: "3.11", postgres: "14" }
+          - { python: "3.11", postgres: "18" }
+          - { python: "3.15", postgres: "18" }
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_PASSWORD: pg
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      PGHEALTH_TEST_URL: postgresql+pg8000://postgres:pg@localhost:5432/postgres
+      PGHEALTH_REQUIRE_DB: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync
+      # coverage run (not --cov) so the module-level lines of the entry-point plugin count
+      - run: uv run --no-sync coverage run -m pytest -ra
+      - run: uv run --no-sync coverage report

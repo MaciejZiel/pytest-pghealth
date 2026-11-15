@@ -1,0 +1,17 @@
+pytest-pghealth
+Copyright (c) 2026 Maciej Zieliński
+Licensed under the MIT License (LICENSE).
+
+This product includes SQL queries from pg-index-health-sql
+(https://github.com/mfvanek/pg-index-health-sql), commit
+8d8b71fa1eb410583bda1d59bbd48f0ea986facc:
+
+    Copyright (c) 2019-2026. Ivan Vakhrushev and others.
+    Licensed under the Apache License 2.0 (LICENSES/Apache-2.0.txt).
+
+The ported queries are the files in src/pytest_pghealth/sql/ whose header
+says "Ported from pg-index-health-sql". Each of them names its original
+file and states what pytest-pghealth changed. Those files remain under the
+Apache License 2.0; the rest of pytest-pghealth is under the MIT License.
+The other SQL files were written for pytest-pghealth and say which
+pg-index-health-sql query they follow, if any.
