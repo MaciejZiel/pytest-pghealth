@@ -9,7 +9,7 @@ from pytest_pghealth.config import ConfigError, Ignore, Settings
 from pytest_pghealth.findings import CheckError, Finding, IgnoredFinding, Report
 from pytest_pghealth.runner import run_checks
 
-__version__ = "0.1.0.dev0"
+__version__ = "0.1.0"
 
 __all__ = [
     "CHECKS",
