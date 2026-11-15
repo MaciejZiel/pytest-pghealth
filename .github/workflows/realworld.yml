@@ -1,0 +1,127 @@
+name: Real projects
+
+# Runs every check against the migrated schemas of open-source projects
+# (docs/real-projects.md). Manual or from realworld/* branches only: the
+# repository is private and Actions minutes are limited.
+on:
+  workflow_dispatch:
+  push:
+    branches: ["realworld/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  project:
+    name: ${{ matrix.project }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [fastapi-template, prefect, netbox, wagtail]
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: pg
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      PGPASSWORD: pg
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: "3.13"
+      - name: Migrate ${{ matrix.project }}
+        env:
+          PROJECT: ${{ matrix.project }}
+        run: |
+          set -euxo pipefail
+          psql -h localhost -U postgres -c "create database project"
+          work="$RUNNER_TEMP/work"
+          mkdir -p "$work"
+          case "$PROJECT" in
+            fastapi-template)
+              git clone --depth 1 https://github.com/fastapi/full-stack-fastapi-template "$work/src"
+              git -C "$work/src" rev-parse HEAD
+              cd "$work/src/backend"
+              export DATABASE_URL=postgresql://postgres:pg@localhost:5432/project
+              uv sync
+              uv run alembic upgrade head
+              ;;
+            prefect)
+              uv venv "$work/venv" -p 3.12
+              uv pip install --python "$work/venv" prefect
+              uv pip show --python "$work/venv" prefect | head -2
+              export PREFECT_API_DATABASE_CONNECTION_URL=postgresql+asyncpg://postgres:pg@localhost:5432/project
+              "$work/venv/bin/prefect" server database upgrade -y
+              ;;
+            netbox)
+              git clone --depth 1 https://github.com/netbox-community/netbox "$work/src"
+              git -C "$work/src" rev-parse HEAD
+              uv venv "$work/venv" -p 3.12
+              sed -E 's/psycopg\[c,pool\]/psycopg[binary,pool]/' "$work/src/requirements.txt" > "$work/requirements.txt"
+              uv pip install --python "$work/venv" -r "$work/requirements.txt"
+              cat > "$work/src/netbox/netbox/configuration.py" <<'PY'
+          ALLOWED_HOSTS = ["*"]
+          DATABASES = {
+              "default": {
+                  "ENGINE": "django.db.backends.postgresql",
+                  "NAME": "project",
+                  "USER": "postgres",
+                  "PASSWORD": "pg",
+                  "HOST": "localhost",
+                  "PORT": "",
+              }
+          }
+          REDIS = {
+              "tasks": {"HOST": "localhost", "PORT": 6379, "USERNAME": "", "PASSWORD": "", "DATABASE": 0, "SSL": False},
+              "caching": {"HOST": "localhost", "PORT": 6379, "USERNAME": "", "PASSWORD": "", "DATABASE": 1, "SSL": False},
+          }
+          SECRET_KEY = "realworld-trial-not-a-secret-0123456789abcdefghijklmnopqrstuvwxyz"
+          API_TOKEN_PEPPERS = {1: "realworld-trial-not-a-secret-pepper-0123456789abcdefghijkl"}
+          PY
+              "$work/venv/bin/python" "$work/src/netbox/manage.py" migrate --no-input
+              ;;
+            wagtail)
+              uv venv "$work/venv" -p 3.12
+              uv pip install --python "$work/venv" wagtail "psycopg[binary]"
+              uv pip show --python "$work/venv" wagtail | head -2
+              cd "$work"
+              "$work/venv/bin/wagtail" start mysite
+              cd mysite
+              cat >> mysite/settings/dev.py <<'PY'
+
+          DATABASES = {
+              "default": {
+                  "ENGINE": "django.db.backends.postgresql",
+                  "NAME": "project",
+                  "USER": "postgres",
+                  "PASSWORD": "pg",
+                  "HOST": "localhost",
+              }
+          }
+          PY
+              "$work/venv/bin/python" manage.py migrate --no-input
+              ;;
+          esac
+      - name: Check the schema
+        env:
+          PROJECT: ${{ matrix.project }}
+        run: |
+          uv sync
+          url=postgresql+pg8000://postgres:pg@localhost:5432/project
+          # Prefect's own URL uses asyncpg: check through it, as a user would
+          if [ "$PROJECT" = prefect ]; then url=postgresql+asyncpg://postgres:pg@localhost:5432/project; fi
+          uv run --no-sync python scripts/realworld.py "$PROJECT" "$url" realworld-out
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: realworld-${{ matrix.project }}
+          path: realworld-out/
