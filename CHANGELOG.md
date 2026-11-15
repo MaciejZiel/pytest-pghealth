@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `--pghealth-list-checks` lists the checks, `on` or `off` for the current
   configuration, and exits.
+- `overlapping_index` names the foreign key a redundant index was made for
+  (Django creates one per `ForeignKey`) and says the longer index still
+  covers it.
+- [Real projects](docs/real-projects.md): every check against the migrated
+  schemas of the full-stack FastAPI template, Prefect, NetBox and Wagtail,
+  each finding classified (313 findings, no false positives), and the
+  workflow that reproduces it.
+- The README has a "Pairs with pytest-queryguard" section.
 - The session check works under pytest-xdist without a URL: each worker
   checks its own database and the controller reports each finding once.
   It needs pytest-xdist's `workeroutput`, present in every 3.x release.
