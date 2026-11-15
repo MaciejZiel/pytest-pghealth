@@ -320,6 +320,81 @@ def _btree_index_on_array(row: Row) -> Finding:
     )
 
 
+def _json_column(row: Row) -> Finding:
+    return Finding(
+        check="json_column",
+        schema=row["schema_name"],
+        table=row["table_name"],
+        object=row["column_name"],
+        message=(
+            f"Column {row['table_ident']}.{row['column_ident']} is json: it is "
+            "parsed again on every access, cannot be compared (=, DISTINCT, "
+            "GROUP BY, UNIQUE) and cannot have a GIN index; jsonb can."
+        ),
+        fix=(
+            f"ALTER TABLE {row['table_ident']} ALTER COLUMN {row['column_ident']} "
+            f"TYPE jsonb USING {row['column_ident']}::jsonb;\n"
+            "-- rewrites the table; jsonb does not keep key order, duplicate keys or whitespace"
+        ),
+    )
+
+
+def _unlogged_table(row: Row) -> Finding:
+    return Finding(
+        check="unlogged_table",
+        schema=row["schema_name"],
+        table=row["table_name"],
+        object=None,
+        message=(
+            f"Table {row['table_ident']} is unlogged: a crash empties it, and "
+            "standbys, backups restored by WAL replay and point-in-time "
+            "recovery never have its rows."
+        ),
+        fix=(
+            f"ALTER TABLE {row['table_ident']} SET LOGGED;\n"
+            "-- rewrites the table into the WAL under an exclusive lock"
+        ),
+    )
+
+
+def _timestamp_without_time_zone(row: Row) -> Finding:
+    column = f"{row['table_ident']}.{row['column_ident']}"
+    precision = int(row["type_precision"])
+    timestamptz = f"timestamptz({precision})" if precision >= 0 else "timestamptz"
+    if row["is_timetz"]:
+        message = (
+            f"Column {column} is {row['column_type']}: a time of day with a "
+            "fixed UTC offset cannot follow daylight saving time, so its values "
+            "are wrong for half of the year in most time zones."
+        )
+        time = f"time({precision})" if precision >= 0 else "time"
+        fix = (
+            f"ALTER TABLE {row['table_ident']} ALTER COLUMN {row['column_ident']} "
+            f"TYPE {time};\n"
+            "-- keeps the local time and drops the offset; store a time zone name "
+            "in another column if it matters, or use timestamptz for points in time"
+        )
+    else:
+        message = (
+            f"Column {column} is {row['column_type']}: the value does not say "
+            "which time zone it is in, so it depends on the writer's TimeZone "
+            "setting, and an hour around each daylight saving change is ambiguous."
+        )
+        fix = (
+            f"ALTER TABLE {row['table_ident']} ALTER COLUMN {row['column_ident']} "
+            f"TYPE {timestamptz} USING {row['column_ident']} AT TIME ZONE 'UTC';\n"
+            "-- if the stored values are UTC; name their real time zone otherwise"
+        )
+    return Finding(
+        check="timestamp_without_time_zone",
+        schema=row["schema_name"],
+        table=row["table_name"],
+        object=row["column_name"],
+        message=message,
+        fix=fix,
+    )
+
+
 CHECKS: dict[str, Check] = {
     check.name: check
     for check in (
@@ -380,6 +455,22 @@ CHECKS: dict[str, Check] = {
             "duplicate_foreign_key",
             "foreign keys identical to another one",
             _duplicate_foreign_key,
+        ),
+        Check(
+            "json_column",
+            "columns of type json instead of jsonb",
+            _json_column,
+        ),
+        Check(
+            "unlogged_table",
+            "unlogged tables, emptied by a crash and not replicated",
+            _unlogged_table,
+        ),
+        Check(
+            "timestamp_without_time_zone",
+            "timestamp (without time zone) and timetz columns (off by default)",
+            _timestamp_without_time_zone,
+            default=False,
         ),
         Check(
             "btree_index_on_array",

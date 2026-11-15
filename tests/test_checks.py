@@ -44,8 +44,11 @@ def test_original_sql_says_so(name):
     assert "Written for pytest-pghealth" in CHECKS[name].sql()[:300]
 
 
-def test_only_the_array_check_is_off_by_default():
-    assert [n for n, c in CHECKS.items() if not c.default] == ["btree_index_on_array"]
+def test_off_by_default():
+    assert [n for n, c in CHECKS.items() if not c.default] == [
+        "timestamp_without_time_zone",
+        "btree_index_on_array",
+    ]
 
 
 def build(name, **row):
@@ -308,3 +311,61 @@ def test_partitioned_indexes_are_dropped_without_concurrently():
     }
     assert build("duplicate_index", **row).fix == "DROP INDEX public.m_a_idx1;"
     assert build("overlapping_index", **row).fix == "DROP INDEX public.m_a_idx1;"
+
+
+def test_json_column_fix():
+    finding = build(
+        "json_column",
+        schema_name="public",
+        table_name="events",
+        table_ident="public.events",
+        column_name="Payload",
+        column_ident='"Payload"',
+    )
+    assert finding.target == "public.events.Payload"
+    assert finding.fix.splitlines()[0] == (
+        'ALTER TABLE public.events ALTER COLUMN "Payload" TYPE jsonb USING "Payload"::jsonb;'
+    )
+
+
+def test_unlogged_table_fix():
+    finding = build(
+        "unlogged_table",
+        schema_name="public",
+        table_name="cache",
+        table_ident="public.cache",
+    )
+    assert finding.target == "public.cache"
+    assert finding.fix.splitlines()[0] == "ALTER TABLE public.cache SET LOGGED;"
+
+
+@pytest.mark.parametrize(
+    ("is_timetz", "precision", "first_line"),
+    [
+        (
+            False,
+            -1,
+            "ALTER TABLE public.t ALTER COLUMN c TYPE timestamptz USING c AT TIME ZONE 'UTC';",
+        ),
+        (
+            False,
+            3,
+            "ALTER TABLE public.t ALTER COLUMN c TYPE timestamptz(3) USING c AT TIME ZONE 'UTC';",
+        ),
+        (True, -1, "ALTER TABLE public.t ALTER COLUMN c TYPE time;"),
+        (True, 0, "ALTER TABLE public.t ALTER COLUMN c TYPE time(0);"),
+    ],
+)
+def test_timestamp_without_time_zone_fix(is_timetz, precision, first_line):
+    finding = build(
+        "timestamp_without_time_zone",
+        schema_name="public",
+        table_name="t",
+        table_ident="public.t",
+        column_name="c",
+        column_ident="c",
+        column_type="timetz" if is_timetz else "timestamp without time zone",
+        is_timetz=is_timetz,
+        type_precision=precision,
+    )
+    assert finding.fix.splitlines()[0] == first_line

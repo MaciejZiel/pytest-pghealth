@@ -36,7 +36,7 @@ def test_workers_check_and_the_controller_reports_once(project):
     assert result.ret == 1
     result.assert_outcomes(passed=8)
     result.stdout.fnmatch_lines(
-        ["*: 11 checks, 1 problem (registered target, from 2 xdist workers)"]
+        ["*: 13 checks, 1 problem (registered target, from 2 xdist workers)"]
     )
     # the same finding from both workers is reported once
     assert result.stdout.str().count("foreign_key_without_index: public.orders") == 1

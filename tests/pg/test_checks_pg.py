@@ -423,3 +423,62 @@ def test_overlapping_partial_indexes_say_nothing_about_foreign_keys(schema):
     assert "foreign key" not in finding.message
     # neither partial index serves the foreign key
     assert schema.targets("foreign_key_without_index") == ["member.member_grp_id_fkey"]
+
+
+def test_json_column(schema):
+    schema.sql(
+        "create table js (id int primary key, a json, b jsonb, c json not null)",
+        "insert into js values (1, '{\"k\": 1}', '{}', '[]')",
+        "create table jp (id int, doc json) partition by range (id)",
+        "create table jp_1 partition of jp for values from (0) to (10)",
+    )
+    # a partition's column is reported on the partitioned table only
+    assert schema.targets("json_column") == ["jp.doc", "js.a", "js.c"]
+    schema.apply_all("json_column")
+    assert schema.sql("select a from js")[0][0] == {"k": 1}
+
+
+def test_unlogged_table(schema):
+    schema.sql(
+        "create unlogged table cache (k text primary key, v text)",
+        "create table logged (id int primary key)",
+    )
+    assert schema.targets("unlogged_table") == ["cache"]
+    schema.apply_all("unlogged_table")
+
+
+def test_timestamp_without_time_zone(schema):
+    schema.sql(
+        "create table ts (id int primary key, a timestamp, b timestamp(3),"
+        " c timestamptz, d timetz(0), e time, f date)",
+        "insert into ts values (1, '2026-03-29 01:30', '2026-03-29 01:30:00.123',"
+        " now(), '10:00+02', '10:00', '2026-01-01')",
+    )
+    assert schema.targets("timestamp_without_time_zone") == ["ts.a", "ts.b", "ts.d"]
+    schema.apply_all("timestamp_without_time_zone")
+    assert schema.sql(
+        "select format_type(atttypid, atttypmod) from pg_attribute"
+        " where attrelid = 'ts'::regclass and attname in ('a', 'b', 'd') order by attname"
+    ) == [
+        ("timestamp with time zone",),
+        ("timestamp(3) with time zone",),
+        ("time(0) without time zone",),
+    ]
+    assert not CHECKS["timestamp_without_time_zone"].default
+
+
+def test_framework_tables_are_skipped_but_not_their_state(schema):
+    schema.sql(
+        "create table auth_permission (id serial primary key, name text)",
+        "create table alembic_version (version_num varchar(32) not null)",
+        "insert into auth_permission (name) values ('a'), ('a')",
+    )
+    with pytest.raises(DBAPIError):
+        schema.sql("create unique index concurrently ap_name on auth_permission (name)")
+    names = ("int4_primary_key", "table_without_primary_key", "invalid_index")
+    assert schema.targets(*names) == ["auth_permission.ap_name"]
+    assert schema.targets(*names, ignore_framework_tables=False) == [
+        "alembic_version",
+        "auth_permission.ap_name",
+        "auth_permission.id",
+    ]
