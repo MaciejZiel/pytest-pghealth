@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-15
+
+The first release.
+
 ### Added
 
 - Eleven structural checks of a PostgreSQL schema, each with a fix:
@@ -29,3 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configuration in `[tool.pghealth]` of `pyproject.toml`: checks on and off,
   schemas, ignores with a required reason, the sequence threshold, and a JSON
   report (`--pghealth-json`).
+
+[Unreleased]: https://github.com/MaciejZiel/pytest-pghealth/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/MaciejZiel/pytest-pghealth/releases/tag/v0.1.0
