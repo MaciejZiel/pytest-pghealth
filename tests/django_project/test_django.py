@@ -100,8 +100,15 @@ def test_session_check_uses_the_django_test_database(project):
     )
 
 
-def test_no_database_test_no_check(project):
+def test_no_database_test(project):
     project.makepyfile(test_shop="def test_plain(): pass")
+    # --pghealth asks for a check in this run: checking nothing fails it
     result = project.runpytest_subprocess("--pghealth")
+    assert result.ret == 1
+    result.stdout.fnmatch_lines(["*no test used the Django test database*"])
+    # enabled in pyproject.toml only, a run without database tests passes
+    with (project.path / "pyproject.toml").open("a") as stream:
+        stream.write("\n[tool.pghealth]\nsession = true\n")
+    result = project.runpytest_subprocess()
     assert result.ret == 0
     result.stdout.fnmatch_lines(["*no test used the Django test database*"])

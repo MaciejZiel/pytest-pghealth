@@ -43,11 +43,26 @@ test, before the session-scoped fixtures are torn down, against the first of:
 4. with pytest-django, the test database of `django_alias`, if a test used
    the database.
 
-When none applies, the summary says so and the run's result is unchanged.
-`--collect-only` never runs the check.
+When the session check finds nothing to check (no source configured, or
+the fixture, registered target or Django database was not set up by any of
+the selected tests), the run fails if `--pghealth` was typed on the command
+line: that run asked for a check. Enabled by `session = true` or by
+`--pghealth` in `addopts`, it only shows a warning, so `pytest tests/unit`
+keeps passing. `--collect-only` never runs the check.
+
 When the check cannot run (the database refuses the connection), the run
-fails and the summary shows the error. Under pytest-xdist only a URL works;
-the check runs in the controller.
+fails and the summary shows the error.
+
+Under pytest-xdist, a URL is checked once, by the controller. Without one,
+each worker runs the check against its own source (with pytest-django, its
+own copy of the test database) and sends the report to the controller,
+which reports each finding once, writes the JSON report and sets the exit
+code. Each worker runs the checks, a few catalog queries, against its own
+copy; that costs well under a second per worker. With `-x` or `--maxfail`
+the workers' results are still reported.
+
+`pytest --pghealth-list-checks` prints every check, `on` or `off` for the
+current configuration, and exits.
 
 A URL without a driver (`postgresql://...`) connects with psycopg, then
 psycopg2, then pg8000 through SQLAlchemy, whichever is installed. A URL with

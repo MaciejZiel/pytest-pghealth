@@ -77,6 +77,32 @@ class Report:
         """True when no check found a problem and no check failed."""
         return not self.findings and not self.errors
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Report:
+        """The inverse of :meth:`to_dict`."""
+
+        def finding(item: dict[str, Any]) -> Finding:
+            return Finding(
+                check=item["check"],
+                schema=item["schema"],
+                table=item["table"],
+                object=item["object"],
+                message=item["message"],
+                fix=item["fix"],
+            )
+
+        schemas = data.get("schemas")
+        return cls(
+            server_version=data.get("server_version", ""),
+            schemas=tuple(schemas) if schemas is not None else None,
+            checks=tuple(data.get("checks", ())),
+            findings=[finding(item) for item in data.get("findings", [])],
+            ignored=[
+                IgnoredFinding(finding(i), i["reason"]) for i in data.get("ignored", [])
+            ],
+            errors=[CheckError(e["check"], e["error"]) for e in data.get("errors", [])],
+        )
+
     def to_dict(self) -> dict[str, Any]:
         from pytest_pghealth import __version__
 

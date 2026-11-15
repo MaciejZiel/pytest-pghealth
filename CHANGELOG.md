@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `--pghealth-list-checks` lists the checks, `on` or `off` for the current
+  configuration, and exits.
+- The session check works under pytest-xdist without a URL: each worker
+  checks its own database and the controller reports each finding once.
+  It needs pytest-xdist's `workeroutput`, present in every 3.x release.
+
+### Changed
+
+- A session check that checks nothing fails the run when `--pghealth` was
+  typed on the command line; enabled in `pyproject.toml` or `addopts`, it
+  stays a warning.
+- Several registered targets: a finding found in more than one is reported
+  once.
+
 ## [0.1.0] - 2026-11-15
 
 The first release.

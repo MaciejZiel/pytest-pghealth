@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from pytest_pghealth.checks import CHECKS
 from pytest_pghealth.config import ConfigError, Settings, load_pyproject, split_names
 from pytest_pghealth.findings import Report
 from pytest_pghealth.runner import run_checks
@@ -28,7 +29,20 @@ class _SessionState:
     report: Report | None = None
     source: str | None = None
     error: str | None = None
-    warning: str | None = None
+    # why nothing was checked, and whether that fails the run
+    skipped: str | None = None
+    skip_fails: bool = False
+    # under pytest-xdist, the controller collects each worker's result here
+    worker_results: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_worker_output(self) -> dict[str, Any]:
+        return {
+            "report": self.report.to_dict() if self.report is not None else None,
+            "source": self.source,
+            "error": self.error,
+            "skipped": self.skipped,
+            "skip_fails": self.skip_fails,
+        }
 
 
 class PgHealth:
@@ -106,6 +120,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--pghealth-json",
         metavar="PATH",
         help="write the session check's report as JSON to PATH",
+    )
+    group.addoption(
+        "--pghealth-list-checks",
+        action="store_true",
+        default=False,
+        help="list the checks, whether each runs with this configuration, and exit",
     )
     group.addoption(
         "--pghealth-warn",
@@ -195,40 +215,79 @@ def _uses_xdist(config: pytest.Config) -> bool:
     return getattr(config.option, "dist", "no") != "no"
 
 
+def _skip(state: _SessionState, reason: str, *, fails: bool) -> None:
+    state.skipped = reason
+    state.skip_fails = fails
+
+
+def _session_url(settings: Settings) -> str | None:
+    return settings.url or os.environ.get(URL_ENVIRONMENT_VARIABLE) or None
+
+
+def _asked_on_command_line(config: pytest.Config) -> bool:
+    """Whether ``--pghealth`` was typed for this run (not in addopts or pyproject.toml).
+
+    Such a run asks for a check, so checking nothing fails it. Enabled by
+    ``session = true`` or addopts, a run of a subset of the tests that never
+    touches the database only says so.
+    """
+    return "--pghealth" in config.invocation_params.args
+
+
+def merge_reports(reports: list[Report]) -> Report:
+    """One report from several of the same schema; each finding is kept once.
+
+    The first report wins for a finding seen more than once, so callers pass
+    the reports in a stable order.
+    """
+    merged = Report()
+    seen: set[tuple[str, ...]] = set()
+
+    def first(key: tuple[str, ...]) -> bool:
+        if key in seen:
+            return False
+        seen.add(key)
+        return True
+
+    for report in reports:
+        merged.server_version = merged.server_version or report.server_version
+        merged.schemas = report.schemas
+        merged.checks = report.checks
+        merged.findings.extend(
+            f for f in report.findings if first(("f", f.check, f.target))
+        )
+        merged.ignored.extend(
+            i for i in report.ignored if first(("i", i.finding.check, i.finding.target))
+        )
+        merged.errors.extend(e for e in report.errors if first(("e", e.check, e.error)))
+    return merged
+
+
 def _run_session_check(session: pytest.Session) -> None:
     config = session.config
     settings = config.stash[SETTINGS_KEY]
     state = config.stash[STATE_KEY]
-    url = settings.url or os.environ.get(URL_ENVIRONMENT_VARIABLE) or None
+    url = _session_url(settings)
+    explicit = _asked_on_command_line(config)
 
     if url:
         state.source = "url"
         state.report = run_checks(url, settings)
         return
     if _uses_xdist(config):
-        state.warning = (
-            "under pytest-xdist the session check needs a URL "
-            f"(--pghealth-url, url in [tool.pghealth] or ${URL_ENVIRONMENT_VARIABLE})"
-        )
+        _merge_worker_results(state, explicit)
         return
     if state.targets:
         state.source = "registered target"
-        report = Report()
-        for target in state.targets:
-            part = run_checks(target, settings)
-            report.server_version = part.server_version
-            report.schemas = part.schemas
-            report.checks = part.checks
-            report.findings.extend(part.findings)
-            report.ignored.extend(part.ignored)
-            report.errors.extend(part.errors)
-        state.report = report
+        state.report = merge_reports([run_checks(t, settings) for t in state.targets])
         return
     if settings.fixture:
         if settings.fixture not in state.fixtures:
-            state.warning = (
+            _skip(
+                state,
                 f"fixture {settings.fixture!r} was not alive at the end of the session "
-                "(no test used it, or it is not session-scoped), so the schema was not checked"
+                "(no test used it, or it is not session-scoped), so the schema was not checked",
+                fails=explicit,
             )
             return
         state.source = f"fixture {settings.fixture}"
@@ -237,7 +296,12 @@ def _run_session_check(session: pytest.Session) -> None:
     if config.pluginmanager.hasplugin("django"):
         blocker = state.fixtures.get("django_db_blocker")
         if "django_db_setup" not in state.fixtures or blocker is None:
-            state.warning = "no test used the Django test database in this run, so the schema was not checked"
+            _skip(
+                state,
+                "no test used the Django test database in this run, "
+                "so the schema was not checked",
+                fails=explicit,
+            )
             return
         from django.db import connections
 
@@ -245,22 +309,62 @@ def _run_session_check(session: pytest.Session) -> None:
         with blocker.unblock():
             state.report = run_checks(connections[settings.django_alias], settings)
         return
-    state.warning = (
+    # No source at all. A registered target counts as none when no selected
+    # test set up the fixture that registers it, so this is a warning unless
+    # the check was asked for on the command line.
+    _skip(
+        state,
         "nothing to check: set url or fixture in [tool.pghealth], pass --pghealth-url, "
-        "or register a target with the pghealth_session fixture"
+        "or register a target with the pghealth_session fixture",
+        fails=explicit,
     )
+
+
+def _merge_worker_results(state: _SessionState, explicit: bool) -> None:
+    """Combine the pytest-xdist workers' results into the controller's state.
+
+    Every worker checks its own database (with pytest-django, a copy per
+    worker), so the same finding usually arrives once per worker: it is kept
+    once, from the lowest-numbered worker, so the result does not depend on
+    which worker finished first.
+    """
+    results = sorted(
+        state.worker_results, key=lambda r: _worker_number(r.get("worker"))
+    )
+    reports = [r for r in results if r["report"] is not None]
+    errors = list(dict.fromkeys(r["error"] for r in results if r["error"]))
+    if errors:
+        state.error = "; ".join(errors)
+    if reports:
+        state.report = merge_reports([Report.from_dict(r["report"]) for r in reports])
+        sources = ", ".join(sorted({r["source"] for r in reports if r["source"]}))
+        count = len(reports)
+        state.source = (
+            f"{sources}, from {count} xdist worker{'s' if count != 1 else ''}"
+        )
+        return
+    if state.error is None:
+        skipped = [r for r in results if r["skipped"]]
+        if skipped:
+            _skip(state, skipped[0]["skipped"], fails=explicit)
+        else:
+            _skip(state, "no pytest-xdist worker ran the check", fails=explicit)
+
+
+def _worker_number(worker: Any) -> tuple[int, str]:
+    text = str(worker or "")
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return (int(digits) if digits else 1 << 30, text)
 
 
 def _session_check_once(session: pytest.Session) -> None:
     config = session.config
     settings = config.stash.get(SETTINGS_KEY, None)
-    if (
-        settings is None
-        or not settings.session
-        or hasattr(config, "workerinput")
-        or config.option.collectonly
-    ):
+    if settings is None or not settings.session or config.option.collectonly:
         return
+    worker = hasattr(config, "workerinput")
+    if worker and _session_url(settings):
+        return  # the controller checks the URL once
     state = config.stash[STATE_KEY]
     if state.ran:
         return
@@ -269,6 +373,12 @@ def _session_check_once(session: pytest.Session) -> None:
         _run_session_check(session)
     except Exception as error:  # noqa: BLE001 - reported in the summary, the run fails
         state.error = f"{type(error).__name__}: {error}"
+    if worker:
+        # the controller reports, writes the JSON and sets the exit code
+        output = state.to_worker_output()
+        output["worker"] = config.workerinput.get("workerid")  # type: ignore[attr-defined]
+        config.workeroutput["pghealth"] = output  # type: ignore[attr-defined]
+        return
     if state.report is not None and settings.json:
         # relative to the directory pytest was started in, as --junitxml is
         path = config.invocation_params.dir / settings.json
@@ -277,6 +387,16 @@ def _session_check_once(session: pytest.Session) -> None:
             path.write_text(state.report.to_json(), encoding="utf-8")
         except OSError as error:
             state.error = f"cannot write the JSON report: {error}"
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node: Any, error: Any) -> None:
+    """pytest-xdist: a worker finished; keep its session check result."""
+    output = getattr(node, "workeroutput", None) or {}
+    result = output.get("pghealth")
+    state = node.config.stash.get(STATE_KEY, None)
+    if result is not None and state is not None:
+        state.worker_results.append(result)
 
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
@@ -295,18 +415,51 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> Generator[
     # A run stopped early (-x, --maxfail) never reaches the last test's
     # teardown: its session fixtures are torn down by pytest's own
     # pytest_sessionfinish, inside this wrapper, so they are still alive here.
-    if exitstatus in (pytest.ExitCode.OK, pytest.ExitCode.TESTS_FAILED):
+    state = session.config.stash.get(STATE_KEY, None)
+    # under xdist, -x and --maxfail end the run as INTERRUPTED, but the
+    # workers have checked already: their results are still reported
+    if exitstatus in (pytest.ExitCode.OK, pytest.ExitCode.TESTS_FAILED) or (
+        state is not None and state.worker_results
+    ):
         _session_check_once(session)
     config = session.config
     settings = config.stash.get(SETTINGS_KEY, None)
     state = config.stash.get(STATE_KEY, None)
-    if settings is not None and state is not None and state.ran:
-        failed = state.error is not None or (
-            state.report is not None and not state.report.ok and not settings.warn_only
+    if (
+        settings is not None
+        and state is not None
+        and state.ran
+        and not hasattr(config, "workerinput")
+    ):
+        failed = (
+            state.error is not None
+            or (state.skipped is not None and state.skip_fails)
+            or (
+                state.report is not None
+                and not state.report.ok
+                and not settings.warn_only
+            )
         )
         if failed and session.exitstatus == pytest.ExitCode.OK:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
     return (yield)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_cmdline_main(config: pytest.Config) -> int | None:
+    if not config.option.pghealth_list_checks:
+        return None
+    try:
+        settings = _settings_from(config)
+    except ConfigError as error:
+        raise pytest.UsageError(f"pytest-pghealth: {error}") from error
+    enabled = set(settings.checks)
+    width = max(len(name) for name in CHECKS)
+    print("pghealth checks (on: runs with this configuration)")
+    for name, check in CHECKS.items():
+        state = "on " if name in enabled else "off"
+        print(f"  {state}  {name:<{width}}  {check.summary}")
+    return 0
 
 
 def pytest_terminal_summary(terminalreporter: Any, config: pytest.Config) -> None:
@@ -318,10 +471,15 @@ def pytest_terminal_summary(terminalreporter: Any, config: pytest.Config) -> Non
     if state.error is not None:
         write.section("pghealth", sep="=", red=True, bold=True)
         write.line(f"the session check failed: {state.error}", red=True)
-        return
-    if state.warning is not None:
-        write.section("pghealth", sep="=", yellow=True)
-        write.line(state.warning, yellow=True)
+        if state.report is None:
+            return
+    if state.skipped is not None:
+        if state.skip_fails:
+            write.section("pghealth", sep="=", red=True, bold=True)
+            write.line(state.skipped, red=True)
+        else:
+            write.section("pghealth", sep="=", yellow=True)
+            write.line(state.skipped, yellow=True)
         return
     report = state.report
     if report is None:
