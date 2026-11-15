@@ -146,25 +146,12 @@ _RESERVED = frozenset(
 
 _PLAIN_IDENTIFIER = re.compile(r"[a-z_][a-z0-9_$]*")
 
-# NAMEDATALEN - 1: PostgreSQL truncates longer identifiers.
-_MAX_IDENTIFIER_BYTES = 63
-
 
 def quote_ident(name: str) -> str:
     """Quote ``name`` as PostgreSQL's quote_ident() does."""
     if _PLAIN_IDENTIFIER.fullmatch(name) and name not in _RESERVED:
         return name
     return '"' + name.replace('"', '""') + '"'
-
-
-def _index_name(table: str, columns: list[str]) -> str:
-    name = "_".join([table, *columns, "idx"])
-    encoded = name.encode("utf-8")
-    if len(encoded) <= _MAX_IDENTIFIER_BYTES:
-        return name
-    # keep the "_idx" suffix so the name still says what it is
-    head = encoded[: _MAX_IDENTIFIER_BYTES - 4].decode("utf-8", errors="ignore")
-    return head + "_idx"
 
 
 def _columns(names: list[str]) -> str:
@@ -174,10 +161,9 @@ def _columns(names: list[str]) -> str:
 def _foreign_key_without_index(row: Row) -> Finding:
     columns = list(row["columns"])
     concurrently = "" if row["table_kind"] == "p" else " CONCURRENTLY"
-    index = quote_ident(_index_name(row["table_name"], columns))
     fix = (
-        f"CREATE INDEX{concurrently} {index} "
-        f"ON {row['table_ident']} ({_columns(list(row['column_idents']))});"
+        # no index name: PostgreSQL picks one that is free (<table>_<column>_idx)
+        f"CREATE INDEX{concurrently} ON {row['table_ident']} ({_columns(list(row['column_idents']))});"
     )
     return Finding(
         check="foreign_key_without_index",

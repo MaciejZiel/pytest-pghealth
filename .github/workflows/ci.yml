@@ -63,3 +63,28 @@ jobs:
       # coverage run (not --cov) so the module-level lines of the entry-point plugin count
       - run: uv run --no-sync coverage run -m pytest -ra
       - run: uv run --no-sync coverage report
+
+  # pytest-django: the session check finds the Django test database itself.
+  # psycopg (LGPL) is installed here only, for Django's PostgreSQL backend.
+  django:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: pg
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      PGHEALTH_TEST_URL: postgresql+pg8000://postgres:pg@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: "3.13"
+      - run: uv sync --group django
+      - run: uv pip install "psycopg[binary]>=3.2"
+      - run: uv run --no-sync python -c "import django, pytest_django, psycopg"
+      - run: uv run --no-sync pytest tests/django_project -ra

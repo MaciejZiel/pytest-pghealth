@@ -3,7 +3,7 @@ from importlib import resources
 
 import pytest
 
-from pytest_pghealth.checks import CHECKS, _index_name, quote_ident
+from pytest_pghealth.checks import CHECKS, quote_ident
 
 SQL_DIR = resources.files("pytest_pghealth").joinpath("sql")
 PLACEHOLDERS = {"{schema_filter}", "{remaining_percent}", "{nulls_not_distinct}"}
@@ -65,15 +65,6 @@ def test_quote_ident(name, quoted):
     assert quote_ident(name) == quoted
 
 
-def test_index_name_fits_namedatalen():
-    assert _index_name("orders", ["customer_id"]) == "orders_customer_id_idx"
-    long = _index_name("a" * 50, ["b" * 20, "c"])
-    assert len(long.encode()) <= 63
-    assert long.endswith("_idx")
-    multibyte = _index_name("zamówienia_" * 6, ["klient_id"])
-    assert len(multibyte.encode()) <= 63
-
-
 def build(name, **row):
     return CHECKS[name].build(row)
 
@@ -92,8 +83,7 @@ def test_foreign_key_without_index_fix():
     )
     assert finding.target == "shop.Order Items.fk_order"
     assert finding.fix == (
-        'CREATE INDEX CONCURRENTLY "Order Items_order_id_Line_idx" '
-        'ON shop."Order Items" (order_id, "Line");'
+        'CREATE INDEX CONCURRENTLY ON shop."Order Items" (order_id, "Line");'
     )
     assert "shop.orders" in finding.message
 
@@ -110,7 +100,7 @@ def test_foreign_key_on_partitioned_table_has_no_concurrently():
         columns=["sensor_id"],
         column_idents=["sensor_id"],
     )
-    assert finding.fix.startswith("CREATE INDEX measurements_sensor_id_idx ON")
+    assert finding.fix.startswith("CREATE INDEX ON public.measurements")
 
 
 def test_duplicate_index_drops_the_constraint_when_it_backs_one():
