@@ -47,11 +47,13 @@ def test_healthy_database(database, capsys):
 def test_the_session_is_read_only_before_any_check(database):
     connection = database["connection"]
     cli.main(["postgresql://staging/app", "--statement-timeout", "5min"])
+    # one transaction, local settings only: nothing outlives it on a pooled connection
     assert connection.settings == [
-        "set application_name = 'pghealth'",
-        "set statement_timeout = '5min'",
-        "set lock_timeout = '5s'",
-        "set default_transaction_read_only = on",
+        "begin transaction read only",
+        "set transaction read only",
+        "set local application_name = 'pghealth'",
+        "set local statement_timeout = '5min'",
+        "set local lock_timeout = '5s'",
     ]
     first_check = next(
         i for i, q in enumerate(connection.queries) if "-- pghealth:" in q
@@ -60,12 +62,18 @@ def test_the_session_is_read_only_before_any_check(database):
         "select current_setting('transaction_read_only') as read_only"
     )
     assert confirmed < first_check
+    # inside the transaction, each check runs in a savepoint
+    assert connection.savepoint_log
 
 
 def test_a_transaction_already_open_is_made_read_only(database):
-    database["connection"] = connection = FakeConnection(in_transaction=True)
+    database["connection"] = FakeConnection(in_transaction=True)
     assert cli.main(["postgresql://staging/app"]) == 0
-    assert connection.settings[-1] == "set transaction read only"
+
+
+def test_a_statement_timeout_with_a_backslash_is_refused(database, capsys):
+    assert cli.main(["postgresql://x/y", "--statement-timeout", "1\\s"]) == 2
+    assert "backslash" in capsys.readouterr().err
 
 
 def test_refuses_to_run_without_read_only(database, capsys):
@@ -82,6 +90,11 @@ def test_findings_exit_1_and_warn_exits_0(database, capsys):
         capsys.readouterr().out
     )
     assert cli.main(["postgresql://x/y", "--warn"]) == 0
+
+
+def test_a_failed_check_exits_1_even_with_warn(database):
+    database["connection"] = FakeConnection(failing=("invalid_index",))
+    assert cli.main(["postgresql://x/y", "--warn"]) == 1
 
 
 def test_json_output_and_file(database, capsys, tmp_path):
@@ -179,7 +192,14 @@ def test_framework_tables(database, capsys):
         "table_name": "django_admin_log",
         "table_ident": "public.django_admin_log",
     }
-    database["connection"] = FakeConnection({"foreign_key_without_index": [row]})
+    database["connection"] = FakeConnection(
+        {
+            "foreign_key_without_index": [row],
+            "framework_markers": [
+                {"schema_name": "public", "table_name": "django_migrations"}
+            ],
+        }
+    )
     assert cli.main(["postgresql://x/y"]) == 0
     assert cli.main(["postgresql://x/y", "--include-framework-tables"]) == 1
 

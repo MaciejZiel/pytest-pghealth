@@ -141,20 +141,22 @@ running out), which you fix whoever wrote the migration.
 | `django-celery-beat` | `django_celery_beat_*` |
 | `django-celery-results` | `django_celery_results_*` |
 | `djangorestframework (authtoken)` | `authtoken_token` |
-| `wagtail` | `wagtail*` |
+| `wagtail` | `wagtailadmin_*`, `wagtailcore_*`, `wagtaildocs_*`, `wagtailembeds_*`, `wagtailforms_*`, `wagtailimages_*`, `wagtailredirects_*`, `wagtailsearch_*`, `wagtailsearchpromotions_*`, `wagtailusers_*` |
 | `alembic` | `alembic_version` |
 | `celery (database result backend)` | `celery_taskmeta`, `celery_tasksetmeta` |
 | `flyway` | `flyway_schema_history` |
 | `liquibase` | `databasechangelog`, `databasechangeloglock` |
 
-The patterns match the table name only, so a finding on your own table that
-references `auth_user` is still reported, and so is an index of yours
-whose name happens to start with `wagtail`. A project that uses the default
+The patterns match the table name, so a finding on your own table that
+references `auth_user` is still reported. The tables of every package from
+`django.contrib.admin` to `wagtail` in this list are skipped only in a
+schema that also has `django_migrations`: a Flask or FastAPI application
+with its own `auth_user` table is checked as usual. A project that uses the default
 `auth.User` model for millions of users may want `auth_user` checked:
 
 ```toml
 [tool.pghealth]
-ignore_framework_tables = false                 # report every table
+ignore_framework_tables = false                 # report every table (an empty list is an error)
 # or only some packages:
 ignore_framework_tables = ["django.contrib.admin", "django.contrib.contenttypes", "alembic"]
 ```

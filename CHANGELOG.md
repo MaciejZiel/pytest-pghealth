@@ -10,16 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - The `pghealth` command runs the checks against any database outside
-  pytest: staging, a restored production snapshot, a replica. It makes its
-  session read-only (and refuses to run if PostgreSQL does not confirm it),
-  sets a statement and lock timeout, reads the ignores of `./pyproject.toml`,
+  pytest: staging, a restored production snapshot, a replica. It runs in one
+  read-only transaction (and refuses to run if PostgreSQL does not confirm
+  it) with local statement and lock timeouts, so nothing is left behind on
+  a pooled connection, reads the ignores of `./pyproject.toml`,
   and prints text, the JSON report or GitHub Actions annotations
   (`--format text|json|github`). See [docs/cli.md](docs/cli.md).
 - Findings on tables that frameworks and packages create (`django.contrib`,
   django-taggit, django-celery-beat and -results, DRF's `authtoken_token`,
   Wagtail, Alembic's `alembic_version`, Celery's result tables, Flyway,
   Liquibase) are ignored by default, except `invalid_index` and
-  `sequence_near_overflow`. `ignore_framework_tables = false` reports them;
+  `sequence_near_overflow`. The Django packages' tables are recognised only
+  in a schema that has `django_migrations`. `ignore_framework_tables = false` reports them;
   a list of package names limits the skip to those packages.
 - `--pghealth-list-checks` also lists the active ignores, each with the
   file and position it comes from, and the framework-owned tables.

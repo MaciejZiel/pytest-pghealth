@@ -152,8 +152,8 @@ pghealth "$DSN" --format github --json pghealth.json            # GitHub annotat
 pghealth "$DSN" --format json                                   # the JSON report
 ```
 
-It makes its session read-only before the first check and refuses to run
-if PostgreSQL does not confirm it; every check is a catalog `SELECT` with a
+It runs in one read-only transaction and refuses to run if PostgreSQL does
+not confirm it is read-only; every check is a catalog `SELECT` with a
 statement and lock timeout, and fixes are printed, never run. It reads the
 ignores in `./pyproject.toml`. Exit status 0 healthy, 1 findings, 2 an
 error. Details, the privileges it needs, and a GitHub Actions example:

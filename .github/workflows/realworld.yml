@@ -128,6 +128,7 @@ jobs:
         env:
           PROJECT: ${{ matrix.project }}
         run: |
+          set -euo pipefail
           uv sync
           url=postgresql+pg8000://postgres:pg@localhost:5432/project
           # Prefect's own URL uses asyncpg: check through it, as a user would

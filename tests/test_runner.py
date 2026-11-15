@@ -15,10 +15,10 @@ def test_clean_database():
     assert (
         report.summary() == "PostgreSQL 18.1, all user schemas: 13 checks, 0 problems"
     )
-    # the version, the savepoint probe, then one query per check, each on
+    # the version, the framework marker tables, the savepoint probe, then one query per check, each on
     # its own cursor
-    assert len(connection.queries) == 15
-    assert connection.closed_cursors == 15
+    assert len(connection.queries) == 16
+    assert connection.closed_cursors == 16
 
 
 def test_findings_and_ignores():
@@ -63,7 +63,7 @@ def test_nulls_not_distinct_needs_postgresql_15():
 def test_default_schema_filter_skips_system_schemas():
     connection = FakeConnection()
     run_checks(connection)
-    assert "left(nsp.nspname, 3) <> 'pg_'" in connection.queries[2]
+    assert "left(nsp.nspname, 3) <> 'pg_'" in connection.queries[3]
 
 
 def test_bad_schema_names():
@@ -150,7 +150,7 @@ def test_only_enabled_checks_run():
         connection, Settings(disable=("all",), enable=("invalid_index",))
     )
     assert report.checks == ("invalid_index",)
-    assert len(connection.queries) == 3
+    assert len(connection.queries) == 4
     report = run_checks(connection, enable=["btree_index_on_array"])
     assert "btree_index_on_array" in report.checks
 
@@ -215,8 +215,13 @@ def test_framework_tables_are_ignored_except_state_checks():
         "schema_ident": "public",
         "index_kind": "i",
     }
+    markers = [{"schema_name": "public", "table_name": "django_migrations"}]
     connection = FakeConnection(
-        {"foreign_key_without_index": [django, FK_ROW], "invalid_index": [invalid]}
+        {
+            "foreign_key_without_index": [django, FK_ROW],
+            "invalid_index": [invalid],
+            "framework_markers": markers,
+        }
     )
     report = run_checks(connection)
     assert [f.table for f in report.findings] == ["orders", "django_session"]
@@ -230,6 +235,20 @@ def test_framework_tables_are_ignored_except_state_checks():
     assert len(report.findings) == 3 and not report.ignored
     report = run_checks(connection, ignore_framework_tables=["alembic"])
     assert len(report.findings) == 3
+
+
+def test_django_tables_need_django_migrations_in_the_same_schema():
+    # a Flask application's own auth_user is checked
+    flask = {**FK_ROW, "table_name": "auth_user", "table_ident": "public.auth_user"}
+    report = run_checks(FakeConnection({"foreign_key_without_index": [flask]}))
+    assert len(report.findings) == 1
+    other_schema = [{"schema_name": "legacy", "table_name": "django_migrations"}]
+    report = run_checks(
+        FakeConnection(
+            {"foreign_key_without_index": [flask], "framework_markers": other_schema}
+        )
+    )
+    assert len(report.findings) == 1
 
 
 def test_a_configured_ignore_comes_first():

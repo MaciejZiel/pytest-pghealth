@@ -26,12 +26,12 @@ class FakeCursor:
             self.connection.savepoint_log.append(sql)
             self.description = None
             return
-        if sql.startswith("set "):
+        if sql.startswith(("set ", "begin ")):
             self.connection.settings.append(sql)
-            if sql == "set default_transaction_read_only = on":
-                # takes effect from the next transaction
-                self.connection.default_read_only = not self.connection.refuse_read_only
-            elif sql == "set transaction read only":
+            if sql == "begin transaction read only":
+                # inside a transaction, BEGIN is only a warning
+                self.connection.in_transaction = True
+            if sql in ("begin transaction read only", "set transaction read only"):
                 self.connection.transaction_read_only = (
                     not self.connection.refuse_read_only
                 )
@@ -39,9 +39,7 @@ class FakeCursor:
             return
         match = _CHECK.search(sql)
         if "transaction_read_only" in sql:
-            read_only = self.connection.transaction_read_only or (
-                not self.connection.in_transaction and self.connection.default_read_only
-            )
+            read_only = self.connection.transaction_read_only
             rows = [{"read_only": "on" if read_only else "off"}]
         elif match is None:
             rows = [
@@ -79,7 +77,6 @@ class FakeConnection:
     ) -> None:
         self.in_transaction = in_transaction
         self.refuse_read_only = refuse_read_only
-        self.default_read_only = False
         self.transaction_read_only = False
         self.settings: list[str] = []
         self.savepoint_log: list[str] = []

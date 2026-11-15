@@ -469,6 +469,8 @@ def test_timestamp_without_time_zone(schema):
 
 def test_framework_tables_are_skipped_but_not_their_state(schema):
     schema.sql(
+        # Django's tables are recognised next to django_migrations
+        "create table django_migrations (id bigint generated always as identity primary key)",
         "create table auth_permission (id serial primary key, name text)",
         "create table alembic_version (version_num varchar(32) not null)",
         "insert into auth_permission (name) values ('a'), ('a')",

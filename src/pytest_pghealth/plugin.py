@@ -15,7 +15,6 @@ from pytest_pghealth.config import (
     Settings,
     describe,
     load_pyproject,
-    split_names,
 )
 from pytest_pghealth.findings import Report
 from pytest_pghealth.runner import run_checks
@@ -151,13 +150,11 @@ def _pyproject_path(config: pytest.Config) -> Path:
 def _settings_from(config: pytest.Config) -> Settings:
     settings = load_pyproject(_pyproject_path(config))
     option = config.option
-    enable = option.pghealth_enable
-    disable = option.pghealth_disable
-    return settings.with_overrides(
+    return settings.with_command_line(
+        option.pghealth_enable, option.pghealth_disable
+    ).with_overrides(
         session=option.pghealth,
         url=option.pghealth_url,
-        enable=(*settings.enable, *split_names(enable)) if enable else None,
-        disable=(*settings.disable, *split_names(disable)) if disable else None,
         json=option.pghealth_json,
         warn_only=option.pghealth_warn,
     )

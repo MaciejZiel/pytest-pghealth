@@ -34,8 +34,12 @@ def main() -> None:
     (out_dir / f"{name}.txt").write_text(text + "\n", encoding="utf-8")
     print(text)
     counts = collections.Counter(f.check for f in report.findings)
+    # run_checks reads no pyproject.toml, so every ignored finding is on a
+    # framework-owned table; count them by package
     ignored = collections.Counter(i.finding.check for i in report.ignored)
-    owners = collections.Counter(i.reason for i in report.ignored)
+    owners = collections.Counter(
+        i.reason.partition("(")[2].partition(")")[0] or i.reason for i in report.ignored
+    )
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as stream:
@@ -48,7 +52,8 @@ def main() -> None:
                 for check in report.checks
             )
             stream.writelines(
-                f"\n{count} ignored: {reason}\n" for reason, count in owners.items()
+                f"\n{count} ignored on tables of {package}\n"
+                for package, count in sorted(owners.items())
             )
             stream.writelines(
                 f"\nfailed: {error.check}: {error.error}\n" for error in report.errors

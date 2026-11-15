@@ -14,7 +14,6 @@ from pytest_pghealth.findings import Finding
 from pytest_pghealth.frameworks import (
     FRAMEWORK_PACKAGES,
     STATE_CHECKS,
-    FrameworkIgnore,
     framework_ignores,
 )
 
@@ -90,10 +89,12 @@ class Settings:
         enabled -= set(self.disable) - {"all"}
         return tuple(name for name in CHECKS if name in enabled)
 
-    @property
-    def active_ignores(self) -> tuple[Ignore | FrameworkIgnore, ...]:
-        """The configured ignores, then the built-in framework ones."""
-        return (*self.ignore, *framework_ignores(self.ignore_framework_tables))
+    def with_command_line(self, enable: str | None, disable: str | None) -> Settings:
+        """Add comma-separated command-line check names to ``enable``/``disable``."""
+        return self.with_overrides(
+            enable=(*self.enable, *split_names(enable)) if enable else None,
+            disable=(*self.disable, *split_names(disable)) if disable else None,
+        )
 
     def with_overrides(self, **overrides: Any) -> Settings:
         """A copy with the given fields replaced; ``None`` values are skipped."""
@@ -264,6 +265,10 @@ def _framework_tables(value: Any) -> bool | tuple[str, ...]:
     if isinstance(value, bool):
         return value
     names = _strings(value, "ignore_framework_tables")
+    if not names:
+        raise ConfigError(
+            "ignore_framework_tables: an empty list skips nothing; write false"
+        )
     unknown = [name for name in names if name not in FRAMEWORK_PACKAGES]
     if unknown:
         raise ConfigError(
@@ -303,7 +308,8 @@ def _ignores(value: Any, source: str = "") -> list[Ignore]:
             raise ConfigError(
                 f"ignore #{position}: unknown check {check!r}; known: {', '.join(CHECKS)}"
             )
-        where = f"{source}: ignore #{position}" if source else f"ignore #{position}"
+        # without a file, the ignore came from code (an override)
+        where = f"{source}: ignore #{position}" if source else ""
         ignores.append(
             Ignore(check=check, object=target, reason=reason.strip(), source=where)
         )

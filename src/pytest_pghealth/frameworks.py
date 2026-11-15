@@ -15,7 +15,7 @@ the migration.
 from __future__ import annotations
 
 import fnmatch
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from pytest_pghealth.findings import Finding
 
@@ -25,18 +25,27 @@ STATE_CHECKS = frozenset({"invalid_index", "sequence_near_overflow"})
 
 @dataclass(frozen=True)
 class FrameworkTables:
-    """The tables one package creates, as patterns over the bare table name."""
+    """The tables one package creates, as patterns over the bare table name.
+
+    ``requires`` names a table that must exist in the same schema for the
+    patterns to apply: the Django packages' tables are skipped only next to
+    ``django_migrations``, so a Flask application's own ``auth_user`` is
+    still checked.
+    """
 
     package: str
     tables: tuple[str, ...]
+    requires: str | None = None
 
     def owns(self, table: str) -> bool:
         return any(fnmatch.fnmatchcase(table, pattern) for pattern in self.tables)
 
 
+DJANGO = "django_migrations"
+
 FRAMEWORK_TABLES: tuple[FrameworkTables, ...] = (
     FrameworkTables("django", ("django_migrations",)),
-    FrameworkTables("django.contrib.admin", ("django_admin_log",)),
+    FrameworkTables("django.contrib.admin", ("django_admin_log",), DJANGO),
     FrameworkTables(
         "django.contrib.auth",
         (
@@ -47,19 +56,38 @@ FRAMEWORK_TABLES: tuple[FrameworkTables, ...] = (
             "auth_user_groups",
             "auth_user_user_permissions",
         ),
+        DJANGO,
     ),
-    FrameworkTables("django.contrib.contenttypes", ("django_content_type",)),
-    FrameworkTables("django.contrib.sessions", ("django_session",)),
-    FrameworkTables("django.contrib.sites", ("django_site",)),
+    FrameworkTables("django.contrib.contenttypes", ("django_content_type",), DJANGO),
+    FrameworkTables("django.contrib.sessions", ("django_session",), DJANGO),
+    FrameworkTables("django.contrib.sites", ("django_site",), DJANGO),
     FrameworkTables(
-        "django.contrib.flatpages", ("django_flatpage", "django_flatpage_sites")
+        "django.contrib.flatpages", ("django_flatpage", "django_flatpage_sites"), DJANGO
     ),
-    FrameworkTables("django.contrib.redirects", ("django_redirect",)),
-    FrameworkTables("django-taggit", ("taggit_tag", "taggit_taggeditem")),
-    FrameworkTables("django-celery-beat", ("django_celery_beat_*",)),
-    FrameworkTables("django-celery-results", ("django_celery_results_*",)),
-    FrameworkTables("djangorestframework (authtoken)", ("authtoken_token",)),
-    FrameworkTables("wagtail", ("wagtail*",)),
+    FrameworkTables("django.contrib.redirects", ("django_redirect",), DJANGO),
+    FrameworkTables("django-taggit", ("taggit_tag", "taggit_taggeditem"), DJANGO),
+    FrameworkTables("django-celery-beat", ("django_celery_beat_*",), DJANGO),
+    FrameworkTables("django-celery-results", ("django_celery_results_*",), DJANGO),
+    FrameworkTables("djangorestframework (authtoken)", ("authtoken_token",), DJANGO),
+    FrameworkTables(
+        "wagtail",
+        tuple(
+            f"wagtail{app}_*"
+            for app in (
+                "admin",
+                "core",
+                "docs",
+                "embeds",
+                "forms",
+                "images",
+                "redirects",
+                "search",
+                "searchpromotions",
+                "users",
+            )
+        ),
+        DJANGO,
+    ),
     FrameworkTables("alembic", ("alembic_version",)),
     FrameworkTables(
         "celery (database result backend)", ("celery_taskmeta", "celery_tasksetmeta")
@@ -75,9 +103,15 @@ SOURCE = "built-in (ignore_framework_tables)"
 
 @dataclass(frozen=True)
 class FrameworkIgnore:
-    """Ignore the design findings on one package's tables, in any schema."""
+    """Ignore the design findings on one package's tables.
+
+    ``schemas`` are the schemas where the package's ``requires`` table
+    exists (see :func:`bind`); until bound, a package with a ``requires``
+    table matches nothing.
+    """
 
     tables: FrameworkTables
+    schemas: frozenset[str] = frozenset()
 
     @property
     def reason(self) -> str:
@@ -91,10 +125,38 @@ class FrameworkIgnore:
         return SOURCE
 
     def matches(self, finding: Finding) -> bool:
-        return finding.check not in STATE_CHECKS and self.tables.owns(finding.table)
+        if finding.check in STATE_CHECKS or not self.tables.owns(finding.table):
+            return False
+        return self.tables.requires is None or finding.schema in self.schemas
 
     def describe(self) -> str:
-        return f"{self.tables.package}: {', '.join(self.tables.tables)}"
+        where = (
+            f" (where {self.tables.requires} exists)" if self.tables.requires else ""
+        )
+        return f"{self.tables.package}: {', '.join(self.tables.tables)}{where}"
+
+
+def required_tables(ignores: tuple[FrameworkIgnore, ...]) -> list[str]:
+    """The ``requires`` tables whose presence the ignores depend on."""
+    return sorted({i.tables.requires for i in ignores if i.tables.requires})
+
+
+def bind(
+    ignores: tuple[FrameworkIgnore, ...], present: set[tuple[str, str]]
+) -> tuple[FrameworkIgnore, ...]:
+    """The ignores, each knowing the schemas where its ``requires`` table is.
+
+    ``present`` holds the ``(schema, table)`` pairs found in the database.
+    """
+    return tuple(
+        replace(
+            ignore,
+            schemas=frozenset(
+                schema for schema, table in present if table == ignore.tables.requires
+            ),
+        )
+        for ignore in ignores
+    )
 
 
 def framework_ignores(packages: bool | tuple[str, ...]) -> tuple[FrameworkIgnore, ...]:
@@ -114,5 +176,7 @@ __all__ = [
     "STATE_CHECKS",
     "FrameworkIgnore",
     "FrameworkTables",
+    "bind",
     "framework_ignores",
+    "required_tables",
 ]

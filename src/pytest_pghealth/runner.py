@@ -13,8 +13,14 @@ from contextlib import contextmanager
 from typing import Any
 
 from pytest_pghealth.checks import CHECKS
-from pytest_pghealth.config import ConfigError, Settings
+from pytest_pghealth.config import ConfigError, Ignore, Settings
 from pytest_pghealth.findings import CheckError, IgnoredFinding, Report
+from pytest_pghealth.frameworks import (
+    FrameworkIgnore,
+    bind,
+    framework_ignores,
+    required_tables,
+)
 
 Fetch = Callable[[str], list[dict[str, Any]]]
 
@@ -54,7 +60,10 @@ def run_with(fetch: Fetch, settings: Settings) -> Report:
         schemas=settings.schemas,
         checks=settings.checks,
     )
-    ignores = settings.active_ignores
+    ignores: tuple[Ignore | FrameworkIgnore, ...] = (
+        *settings.ignore,
+        *_framework_ignores(fetch, settings, schema_filter),
+    )
     savepoints = _savepoints_work(fetch)
     for name in settings.checks:
         check = CHECKS[name]
@@ -87,6 +96,26 @@ def run_with(fetch: Fetch, settings: Settings) -> Report:
     return report
 
 
+def _framework_ignores(
+    fetch: Fetch, settings: Settings, schema_filter: str
+) -> tuple[FrameworkIgnore, ...]:
+    """The built-in framework ignores, bound to the schemas they apply to."""
+    ignores = framework_ignores(settings.ignore_framework_tables)
+    required = required_tables(ignores)
+    if not required:
+        return ignores
+    rows = fetch(
+        "-- pghealth: framework_markers\n"
+        "select nsp.nspname::text as schema_name, pc.relname::text as table_name\n"
+        "from pg_catalog.pg_class pc\n"
+        "inner join pg_catalog.pg_namespace nsp on nsp.oid = pc.relnamespace\n"
+        "where pc.relkind in ('r', 'p') and "
+        f"pc.relname in ({', '.join(_literal(name) for name in required)}) and "
+        f"{schema_filter}"
+    )
+    return bind(ignores, {(row["schema_name"], row["table_name"]) for row in rows})
+
+
 def _savepoints_work(fetch: Fetch) -> bool:
     """Whether the connection is inside a transaction that a failed check would abort.
 
@@ -107,8 +136,9 @@ def _one_line(error: BaseException) -> str:
 
 
 def _literal(value: str) -> str:
+    """A SQL string literal; backslashes and NUL are refused, not escaped."""
     if "\\" in value or "\x00" in value:
-        raise ConfigError(f"schema name {value!r} contains a backslash or NUL")
+        raise ConfigError(f"{value!r} contains a backslash or NUL")
     return "'" + value.replace("'", "''") + "'"
 
 

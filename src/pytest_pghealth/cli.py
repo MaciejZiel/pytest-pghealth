@@ -2,8 +2,8 @@
 
 For long-lived databases (staging, a restored production snapshot, a
 replica), where invalid indexes and sequences near overflow actually occur.
-The session is made read-only before the first check runs, and the run
-stops if PostgreSQL does not confirm it.
+All checks run in one read-only transaction; nothing runs unless
+PostgreSQL confirms it is read-only.
 """
 
 from __future__ import annotations
@@ -20,10 +20,9 @@ from pytest_pghealth.config import (
     Settings,
     describe,
     load_pyproject,
-    split_names,
 )
 from pytest_pghealth.findings import Report
-from pytest_pghealth.runner import Fetch, connect, run_with
+from pytest_pghealth.runner import Fetch, _literal, connect, run_with
 
 URL_ENVIRONMENT_VARIABLE = "PGHEALTH_URL"
 
@@ -39,10 +38,10 @@ def _parser() -> argparse.ArgumentParser:
         prog="pghealth",
         description=(
             "Check a PostgreSQL database's schema with the pytest-pghealth checks. "
-            "Read-only: the session is set to read-only before any check runs."
+            "Read-only: every check runs in one read-only transaction."
         ),
         epilog=(
-            "Exit status: 0 healthy (or --warn), 1 findings or a failed check, "
+            "Exit status: 0 healthy (or findings with --warn), 1 findings or a failed check, "
             "2 a usage, configuration or connection error."
         ),
     )
@@ -92,7 +91,9 @@ def _parser() -> argparse.ArgumentParser:
         "--json", metavar="PATH", help="also write the JSON report to PATH"
     )
     parser.add_argument(
-        "--warn", action="store_true", help="exit 0 even when there are findings"
+        "--warn",
+        action="store_true",
+        help="exit 0 even when there are findings (a check that failed still exits 1)",
     )
     parser.add_argument(
         "--statement-timeout",
@@ -117,38 +118,37 @@ def _settings(args: argparse.Namespace) -> Settings:
         if args.config and not path.is_file():
             raise ConfigError(f"{path}: no such file")
         settings = load_pyproject(path)
-    return settings.with_overrides(
-        enable=(*settings.enable, *split_names(args.enable)) if args.enable else None,
-        disable=(*settings.disable, *split_names(args.disable))
-        if args.disable
-        else None,
+    return settings.with_command_line(args.enable, args.disable).with_overrides(
         schemas=args.schema,
         sequence_remaining_percent=args.sequence_remaining_percent,
         ignore_framework_tables=False if args.include_framework_tables else None,
     )
 
 
-def _literal(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
-
-
 def read_only_session(fetch: Fetch, statement_timeout: str) -> None:
-    """Make the session read-only and bounded, and confirm it.
+    """Open one read-only transaction with local timeouts, and confirm it.
 
-    Raises :class:`RuntimeError` if PostgreSQL does not report the current
+    Everything runs in that transaction and every setting is ``SET LOCAL``,
+    so nothing outlives it: behind a transaction-mode pooler (pgbouncer) no
+    setting stays on a server connection someone else uses next. Closing
+    the connection rolls the transaction back.
+
+    Raises :class:`RuntimeError` if PostgreSQL does not report the
     transaction as read-only.
     """
-    fetch("set application_name = 'pghealth'")
-    fetch(f"set statement_timeout = {_literal(statement_timeout)}")
-    # catalog reads take only light locks; never wait behind a migration
-    fetch("set lock_timeout = '5s'")
-    fetch("set default_transaction_read_only = on")
-    if _read_only(fetch):
-        return
-    # a driver that opened a transaction before the setting: make this one read-only too
+    # a driver in autocommit mode starts the transaction here; one that has
+    # already begun one (SQLAlchemy) only gets a warning, and the next line
+    # makes that transaction read-only
+    fetch("begin transaction read only")
     fetch("set transaction read only")
+    fetch("set local application_name = 'pghealth'")
+    fetch(f"set local statement_timeout = {_literal(statement_timeout)}")
+    # catalog reads take only light locks; never wait behind a migration
+    fetch("set local lock_timeout = '5s'")
     if not _read_only(fetch):
-        raise RuntimeError("the session could not be made read-only; nothing was run")
+        raise RuntimeError(
+            "the transaction could not be made read-only; nothing was run"
+        )
 
 
 def _read_only(fetch: Fetch) -> bool:
@@ -220,9 +220,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             path.write_text(report.to_json(), encoding="utf-8")
         except OSError as error:
             return _error(f"cannot write the JSON report: {error}")
-    if report.ok or args.warn:
-        return EXIT_OK
-    return EXIT_FINDINGS
+    if report.errors or (report.findings and not args.warn):
+        return EXIT_FINDINGS
+    return EXIT_OK
 
 
 def run() -> None:
