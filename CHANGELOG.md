@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sequence_near_overflow`, `foreign_key_type_mismatch`,
   `nullable_unique_column`, `not_valid_constraint` and
   `duplicate_foreign_key`; `btree_index_on_array` is available but off by
-  default. Eight of the queries are ported from
+  default. Nine of the queries are ported from
   [pg-index-health-sql](https://github.com/mfvanek/pg-index-health-sql)
   (Apache-2.0, see `NOTICE`).
 - `run_checks(target)` for a database URL, a SQLAlchemy engine, connection,
