@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-15
+
 ### Added
 
 - The `pghealth` command runs the checks against any database outside
@@ -36,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Thirteen checks run by default (eleven before): `json_column` and
   `unlogged_table` are on.
+- [Real projects](docs/real-projects.md) re-run with 0.3.0: 240 findings
+  (no false positives) and 78 skipped on framework-owned tables, including
+  every finding of a new Wagtail site.
 
 ## [0.2.0] - 2026-11-15
 
@@ -90,6 +95,7 @@ The first release.
   schemas, ignores with a required reason, the sequence threshold, and a JSON
   report (`--pghealth-json`).
 
-[Unreleased]: https://github.com/MaciejZiel/pytest-pghealth/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/MaciejZiel/pytest-pghealth/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/MaciejZiel/pytest-pghealth/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/MaciejZiel/pytest-pghealth/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MaciejZiel/pytest-pghealth/releases/tag/v0.1.0
