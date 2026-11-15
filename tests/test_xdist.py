@@ -36,7 +36,7 @@ def test_workers_check_and_the_controller_reports_once(project):
     assert result.ret == 1
     result.assert_outcomes(passed=8)
     result.stdout.fnmatch_lines(
-        ["*: 11 checks, 1 problem (registered target, 2 xdist workers)"]
+        ["*: 11 checks, 1 problem (registered target, from 2 xdist workers)"]
     )
     # the same finding from both workers is reported once
     assert result.stdout.str().count("foreign_key_without_index: public.orders") == 1
@@ -47,7 +47,9 @@ def test_workers_check_and_the_controller_reports_once(project):
 def test_warn_only_under_xdist(project):
     result = project.runpytest_subprocess("-n", "2", "--pghealth", "--pghealth-warn")
     assert result.ret == 0
-    result.stdout.fnmatch_lines(["*1 problem (registered target, 2 xdist workers)"])
+    result.stdout.fnmatch_lines(
+        ["*1 problem (registered target, from 2 xdist workers)"]
+    )
 
 
 def test_nothing_checked_under_xdist_fails_with_pghealth(pytester):
@@ -55,3 +57,12 @@ def test_nothing_checked_under_xdist_fails_with_pghealth(pytester):
     result = pytester.runpytest_subprocess("-n", "2", "--pghealth")
     assert result.ret == 1
     result.stdout.fnmatch_lines(["*nothing to check*"])
+
+
+def test_workers_results_survive_maxfail(project):
+    project.makepyfile(test_fail="def test_fail(database): assert 0")
+    result = project.runpytest_subprocess("-n", "2", "-x", "--pghealth")
+    assert result.ret != 0
+    result.stdout.fnmatch_lines(
+        ["*1 problem (registered target, from * xdist worker*)"]
+    )

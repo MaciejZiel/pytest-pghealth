@@ -310,3 +310,21 @@ def test_list_checks_reports_bad_configuration(project):
     project.makepyprojecttoml("[tool.pghealth]\ndisable = ['nope']\n")
     result = project.runpytest("--pghealth-list-checks")
     assert result.ret == pytest.ExitCode.USAGE_ERROR
+
+
+def test_nothing_to_check_is_a_warning_from_addopts(project):
+    project.makepyprojecttoml('[tool.pytest.ini_options]\naddopts = "--pghealth"\n')
+    project.makepyfile("def test_ok(): pass")
+    result = project.runpytest()
+    assert result.ret == 0
+    result.stdout.fnmatch_lines(["*nothing to check*"])
+
+
+def test_registered_targets_report_a_finding_once(project):
+    project.makeconftest(
+        CONFTEST_REGISTER
+        + "    pghealth_session.register(FakeConnection({'foreign_key_without_index': [FK_ROW]}))\n"
+    )
+    project.makepyfile("def test_ok(): pass")
+    result = project.runpytest("--pghealth")
+    result.stdout.fnmatch_lines(["*: 11 checks, 1 problem (registered target)"])

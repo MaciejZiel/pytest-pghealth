@@ -115,7 +115,7 @@ def test_plugin_session_check_with_engine_fixture(project, schema):
     )
     project.makepyfile("def test_uses(engine): pass")
     result = project.runpytest()
-    assert result.ret == 1  # no fixture configured: nothing to check fails
+    assert result.ret == 0  # nothing to check: a warning without --pghealth
     result.stdout.fnmatch_lines(["*nothing to check*"])
     project.makepyprojecttoml(
         f"""

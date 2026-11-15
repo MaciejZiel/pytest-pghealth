@@ -120,9 +120,10 @@ The session check finds the database, in this order:
 Under pytest-xdist a URL is checked once, by the controller; otherwise each
 worker checks its own database and the controller reports the findings once.
 
-A run that checks nothing fails when `--pghealth` was given, so CI cannot
-pass while no check ran; with `session = true` in `pyproject.toml` only, a
-run of a few tests that never touch the database just says so.
+A run that checks nothing fails when `--pghealth` was typed on the command
+line, so a CI job that asks for the check cannot pass without it; enabled in
+`pyproject.toml` (or `addopts`), a run of a few tests that never touch the
+database just says so.
 
 `pytest --pghealth-list-checks` lists the checks and which of them run with
 your configuration.
