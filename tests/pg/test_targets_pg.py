@@ -1,5 +1,6 @@
 """The kinds of targets run_checks accepts, and the plugin, on real PostgreSQL."""
 
+import json
 import os
 
 import pytest
@@ -92,7 +93,7 @@ def test_plugin_session_check_with_url(project, schema):
     result.stdout.fnmatch_lines(
         [
             "*= pghealth =*",
-            "PostgreSQL *: 11 checks, 1 problem (url)",
+            "PostgreSQL *: 13 checks, 1 problem (url)",
             f"foreign_key_without_index: {schema.name}.child.child_parent_id_fkey",
             (f"  fix: CREATE INDEX CONCURRENTLY ON {schema.name}.child (parent_id);"),
         ]
@@ -147,4 +148,33 @@ def test_plugin_fixture_in_a_test(project, schema):
     result.assert_outcomes(failed=1)
     result.stdout.fnmatch_lines(
         [f"*foreign_key_without_index: {schema.name}.child.child_parent_id_fkey"]
+    )
+
+
+def test_cli_against_a_database(schema, capsys):
+    from pytest_pghealth import cli
+
+    schema.sql(*FK_SCHEMA)
+    assert (
+        cli.main([URL, "--no-config", "--schema", schema.name, "--format", "json"]) == 1
+    )
+    data = json.loads(capsys.readouterr().out)
+    assert [f["target"] for f in data["findings"]] == expected(schema)
+    assert data["errors"] == []
+
+
+def test_cli_session_is_read_only(schema):
+    from sqlalchemy.exc import DBAPIError
+
+    from pytest_pghealth.cli import read_only_session
+    from pytest_pghealth.runner import connect
+
+    with connect(URL) as fetch:
+        read_only_session(fetch, "10s")
+        assert fetch("show statement_timeout")[0]["statement_timeout"] == "10s"
+        with pytest.raises(DBAPIError, match="read-only transaction"):
+            fetch(f"create table {schema.name}.nope (id int)")
+    assert not schema.sql(
+        f"select 1 from pg_class where relname = 'nope'"
+        f" and relnamespace = '{schema.name}'::regnamespace"
     )
