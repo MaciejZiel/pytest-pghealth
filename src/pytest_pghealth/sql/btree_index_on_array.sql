@@ -3,8 +3,9 @@
 -- (https://github.com/mfvanek/pg-index-health-sql, commit 8d8b71f).
 -- Copyright (c) 2019-2026. Ivan Vakhrushev and others.
 -- Licensed under the Apache License 2.0 (LICENSES/Apache-2.0.txt).
--- Modified for pytest-pghealth: several schemas
--- and quoted identifiers.
+-- Modified for pytest-pghealth: several schemas,
+-- quoted identifiers, and one row per index with its array columns, its key
+-- column count and whether a constraint needs it.
 
 -- B-tree indexes on array columns. A B-tree only helps comparisons of the
 -- whole array; containment and overlap queries (@>, <@, &&) need GIN.
@@ -14,8 +15,13 @@ select
     quote_ident(nsp.nspname) || '.' || quote_ident(tbl.relname) as table_ident,
     pc.relname::text as index_name,
     quote_ident(nsp.nspname) || '.' || quote_ident(pc.relname) as index_ident,
-    col.attname::text as column_name,
-    quote_ident(col.attname) as column_ident
+    pc.relkind::text as index_kind,
+    pi.indnkeyatts as key_column_count,
+    exists (
+        select 1 from pg_catalog.pg_constraint con where con.conindid = pi.indexrelid
+    ) as backs_constraint,
+    array_agg(col.attname::text order by col.attnum) as columns,
+    array_agg(quote_ident(col.attname) order by col.attnum) as column_idents
 from
     pg_catalog.pg_index pi
     inner join pg_catalog.pg_class pc on pc.oid = pi.indexrelid
@@ -30,4 +36,5 @@ where
     {schema_filter} and
     not pc.relispartition and
     typ.typcategory = 'A' /* array types */
-order by schema_name, table_name, index_name, column_name;
+group by nsp.nspname, tbl.relname, pc.relname, pc.relkind, pi.indnkeyatts, pi.indexrelid
+order by schema_name, table_name, index_name;

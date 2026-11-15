@@ -44,6 +44,7 @@ test, before the session-scoped fixtures are torn down, against the first of:
    the database.
 
 When none applies, the summary says so and the run's result is unchanged.
+`--collect-only` never runs the check.
 When the check cannot run (the database refuses the connection), the run
 fails and the summary shows the error. Under pytest-xdist only a URL works;
 the check runs in the controller.
@@ -74,7 +75,8 @@ report lists them with their reasons.
 
 ## JSON report
 
-`--pghealth-json PATH` (or `json`) writes the session check's report:
+`--pghealth-json PATH` (or `json`) writes the session check's report, relative
+to the directory pytest was started in; missing directories are created:
 
 ```json
 {
@@ -121,4 +123,7 @@ print(report.format())
 `AsyncEngine` (checked through a synchronous driver: psycopg, psycopg2 or
 pg8000), a Django connection, or any DB-API connection. It only reads the
 catalog; on a connection you pass in, it runs in whatever transaction that
-connection has open.
+connection has open, and wraps each check in a savepoint, so a check that
+fails (for example on a privilege) leaves that transaction usable. A URL
+with an async driver (`postgresql+asyncpg://`) is checked through a
+synchronous one.

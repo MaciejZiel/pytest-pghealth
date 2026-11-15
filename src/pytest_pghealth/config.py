@@ -84,6 +84,10 @@ class Settings:
                 given[key] = _check_names(given[key], key)
         if "schemas" in given:
             given["schemas"] = tuple(_strings(given["schemas"], "schemas"))
+        if "sequence_remaining_percent" in given:
+            given["sequence_remaining_percent"] = _percent(
+                given["sequence_remaining_percent"]
+            )
         if "ignore" in given:
             given["ignore"] = tuple(_ignores(given["ignore"]))
         return replace(self, **given)
@@ -164,9 +168,10 @@ def split_names(value: str) -> list[str]:
 def _strings(value: Any, key: str) -> list[str]:
     if isinstance(value, str):
         value = [value]
-    if not isinstance(value, Iterable) or not all(
-        isinstance(item, str) and item for item in value
-    ):
+    if not isinstance(value, Iterable):
+        raise ConfigError(f"{key} must be a list of non-empty strings")
+    value = list(value)  # a generator is consumed once
+    if not all(isinstance(item, str) and item for item in value):
         raise ConfigError(f"{key} must be a list of non-empty strings")
     return list(value)
 

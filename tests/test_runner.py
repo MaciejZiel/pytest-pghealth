@@ -15,9 +15,10 @@ def test_clean_database():
     assert (
         report.summary() == "PostgreSQL 18.1, all user schemas: 11 checks, 0 problems"
     )
-    # one version query, then one query per check, each on its own cursor
-    assert len(connection.queries) == 12
-    assert connection.closed_cursors == 12
+    # the version, the savepoint probe, then one query per check, each on
+    # its own cursor
+    assert len(connection.queries) == 13
+    assert connection.closed_cursors == 13
 
 
 def test_findings_and_ignores():
@@ -62,7 +63,7 @@ def test_nulls_not_distinct_needs_postgresql_15():
 def test_default_schema_filter_skips_system_schemas():
     connection = FakeConnection()
     run_checks(connection)
-    assert "left(nsp.nspname, 3) <> 'pg_'" in connection.queries[1]
+    assert "left(nsp.nspname, 3) <> 'pg_'" in connection.queries[2]
 
 
 def test_bad_schema_names():
@@ -87,13 +88,69 @@ def test_a_failing_check_does_not_stop_the_others():
     assert "sequence_near_overflow: the check failed" in report.format()
 
 
+def test_a_failing_check_is_rolled_back_to_a_savepoint():
+    connection = FakeConnection(failing=("invalid_index",), in_transaction=True)
+    settings = Settings(disable=("all",), enable=("invalid_index", "duplicate_index"))
+    report = run_checks(connection, settings)
+    assert [e.check for e in report.errors] == ["invalid_index"]
+    assert connection.savepoint_log == [
+        "savepoint pghealth_probe",
+        "release savepoint pghealth_probe",
+        "savepoint pghealth_check",
+        "release savepoint pghealth_check",
+        "savepoint pghealth_check",
+        "rollback to savepoint pghealth_check",
+        "release savepoint pghealth_check",
+    ]
+
+
+def test_no_savepoints_in_autocommit():
+    connection = FakeConnection()
+    run_checks(connection)
+    assert connection.savepoint_log == []
+
+
+def test_async_url_gets_a_sync_driver(monkeypatch):
+    from contextlib import contextmanager
+
+    from pytest_pghealth import runner
+
+    seen = []
+
+    @contextmanager
+    def fake_connect(url):
+        seen.append(url)
+        yield runner._dbapi_fetch(FakeConnection())
+
+    monkeypatch.setattr(runner, "_connect_sqlalchemy", fake_connect)
+    monkeypatch.setattr(runner, "_sync_driver", lambda: "pg8000")
+    run_checks("postgresql+asyncpg://u:p@db/app")
+    assert seen == ["postgresql+pg8000://u:p@db/app"]
+    monkeypatch.setattr(runner, "_sync_driver", lambda: None)
+    with pytest.raises(ConfigError, match="async driver"):
+        run_checks("postgresql+asyncpg://u:p@db/app")
+
+
+def test_overrides_are_validated():
+    with pytest.raises(ConfigError, match="between 0 and 100"):
+        run_checks(FakeConnection(), sequence_remaining_percent=150)
+    report = run_checks(FakeConnection(), schemas=(name for name in ["public"]))
+    assert report.schemas == ("public",)
+
+
+def test_ignore_snippet_is_escaped():
+    row = dict(FK_ROW, constraint_name='we"ird*fk')
+    text = run_checks(FakeConnection({"foreign_key_without_index": [row]})).format()
+    assert 'object = "public.orders.we\\"ird[*]fk"' in text
+
+
 def test_only_enabled_checks_run():
     connection = FakeConnection()
     report = run_checks(
         connection, Settings(disable=("all",), enable=("invalid_index",))
     )
     assert report.checks == ("invalid_index",)
-    assert len(connection.queries) == 2
+    assert len(connection.queries) == 3
     report = run_checks(connection, enable=["btree_index_on_array"])
     assert "btree_index_on_array" in report.checks
 

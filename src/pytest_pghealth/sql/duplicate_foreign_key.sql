@@ -4,10 +4,12 @@
 -- Copyright (c) 2019-2026. Ivan Vakhrushev and others.
 -- Licensed under the Apache License 2.0 (LICENSES/Apache-2.0.txt).
 -- Modified for pytest-pghealth: several schemas, quoted
--- identifiers, and the referenced columns compared as well.
+-- identifiers, and the referenced columns, actions, match type and
+-- deferrability compared as well.
 
 -- Foreign keys identical to another one on the same table: same columns,
--- same referenced table and columns. Each one is checked on every write.
+-- same referenced table and columns, same ON DELETE / ON UPDATE actions,
+-- match type and deferrability. Each one is checked on every write.
 with
     fk as (
         select
@@ -17,7 +19,9 @@ with
             c.conname::text as constraint_name,
             c.conrelid,
             c.confrelid,
-            c.conkey::text || ' ' || c.confkey::text as key_columns
+            c.conkey::text || ' ' || c.confkey::text || ' ' || c.confupdtype::text || ' ' ||
+            c.confdeltype::text || ' ' || c.confmatchtype::text || ' ' ||
+            c.condeferrable::text || ' ' || c.condeferred::text as key_columns
         from
             pg_catalog.pg_constraint c
             inner join pg_catalog.pg_class tbl on tbl.oid = c.conrelid

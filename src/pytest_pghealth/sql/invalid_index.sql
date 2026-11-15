@@ -15,6 +15,7 @@ select
     quote_ident(nsp.nspname) || '.' || quote_ident(tbl.relname) as table_ident,
     ic.relname::text as index_name,
     quote_ident(nsp.nspname) || '.' || quote_ident(ic.relname) as index_ident,
+    quote_ident(nsp.nspname) as schema_ident,
     ic.relkind::text as index_kind
 from
     pg_catalog.pg_index pi

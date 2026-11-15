@@ -128,10 +128,15 @@ class Report:
                 "To accept a finding, add an ignore with a reason to pyproject.toml:"
             )
             lines.append("  [[tool.pghealth.ignore]]")
-            lines.append(f'  check = "{first.check}"')
-            lines.append(f'  object = "{first.target}"')
+            lines.append(f"  check = {json.dumps(first.check)}")
+            lines.append(f"  object = {json.dumps(_glob_escape(first.target))}")
             lines.append('  reason = "why this is fine here"')
         return "\n".join(lines)
+
+
+def _glob_escape(text: str) -> str:
+    """Escape the pattern characters of ``fnmatch``: ``a*b`` -> ``a[*]b``."""
+    return "".join(f"[{ch}]" if ch in "*?[" else ch for ch in text)
 
 
 def _indent_fix(fix: str) -> list[str]:

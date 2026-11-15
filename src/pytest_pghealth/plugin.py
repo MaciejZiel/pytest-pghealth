@@ -67,7 +67,8 @@ class PgHealthSession:
         The session check runs only when it is enabled (``--pghealth`` or
         ``session = true`` in ``[tool.pghealth]``).
         """
-        self._state.targets.append(target)
+        if not any(known is target for known in self._state.targets):
+            self._state.targets.append(target)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -253,7 +254,12 @@ def _run_session_check(session: pytest.Session) -> None:
 def _session_check_once(session: pytest.Session) -> None:
     config = session.config
     settings = config.stash.get(SETTINGS_KEY, None)
-    if settings is None or not settings.session or hasattr(config, "workerinput"):
+    if (
+        settings is None
+        or not settings.session
+        or hasattr(config, "workerinput")
+        or config.option.collectonly
+    ):
         return
     state = config.stash[STATE_KEY]
     if state.ran:
@@ -264,7 +270,13 @@ def _session_check_once(session: pytest.Session) -> None:
     except Exception as error:  # noqa: BLE001 - reported in the summary, the run fails
         state.error = f"{type(error).__name__}: {error}"
     if state.report is not None and settings.json:
-        Path(settings.json).write_text(state.report.to_json(), encoding="utf-8")
+        # relative to the directory pytest was started in, as --junitxml is
+        path = config.invocation_params.dir / settings.json
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(state.report.to_json(), encoding="utf-8")
+        except OSError as error:
+            state.error = f"cannot write the JSON report: {error}"
 
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)

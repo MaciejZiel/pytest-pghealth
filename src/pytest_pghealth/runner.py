@@ -48,16 +48,26 @@ def run_checks(
             schemas=settings.schemas,
             checks=settings.checks,
         )
+        savepoints = _savepoints_work(fetch)
         for name in settings.checks:
             check = CHECKS[name]
             sql = check.sql()
             for placeholder, value in replacements.items():
                 sql = sql.replace(placeholder, value)
             try:
+                if savepoints:
+                    fetch("savepoint pghealth_check")
                 rows = fetch(sql)
             except Exception as error:  # noqa: BLE001 - reported per check, the others still run
                 report.errors.append(CheckError(name, _one_line(error)))
+                if savepoints:
+                    # the failed query aborted the caller's transaction: undo
+                    # just this check, so the next one and the caller go on
+                    fetch("rollback to savepoint pghealth_check")
+                    fetch("release savepoint pghealth_check")
                 continue
+            if savepoints:
+                fetch("release savepoint pghealth_check")
             for row in rows:
                 finding = check.build(row)
                 ignore = next((i for i in settings.ignore if i.matches(finding)), None)
@@ -66,6 +76,20 @@ def run_checks(
                 else:
                     report.ignored.append(IgnoredFinding(finding, ignore.reason))
     return report
+
+
+def _savepoints_work(fetch: Fetch) -> bool:
+    """Whether the connection is inside a transaction that a failed check would abort.
+
+    In autocommit mode each query is its own transaction and SAVEPOINT fails
+    harmlessly ("can only be used in transaction blocks").
+    """
+    try:
+        fetch("savepoint pghealth_probe")
+    except Exception:  # noqa: BLE001 - autocommit: nothing to protect
+        return False
+    fetch("release savepoint pghealth_probe")
+    return True
 
 
 def _one_line(error: BaseException) -> str:
@@ -92,6 +116,8 @@ def _dbapi_fetch(connection: Any) -> Fetch:
         cursor = connection.cursor()
         try:
             cursor.execute(sql)
+            if cursor.description is None:  # SAVEPOINT and friends
+                return []
             names = [column[0] for column in cursor.description]
             return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
         finally:
@@ -103,6 +129,8 @@ def _dbapi_fetch(connection: Any) -> Fetch:
 def _sqlalchemy_fetch(connection: Any) -> Fetch:
     def fetch(sql: str) -> list[dict[str, Any]]:
         result = connection.exec_driver_sql(sql)
+        if not result.returns_rows:  # SAVEPOINT and friends
+            return []
         return [dict(row) for row in result.mappings().all()]
 
     return fetch
@@ -132,6 +160,9 @@ def _sqlalchemy_types() -> dict[str, Any] | None:
     return types
 
 
+_ASYNC_DRIVERS = {"asyncpg", "psycopg_async", "aiopg"}
+
+
 def _sync_driver() -> str | None:
     for module, driver in (
         ("psycopg", "psycopg"),
@@ -156,17 +187,9 @@ def connect(target: Any) -> Iterator[Fetch]:
         if "async_engine" in sqlalchemy and isinstance(
             target, sqlalchemy["async_engine"]
         ):
-            url = target.url
-            driver = _sync_driver()
-            if driver is None:
-                raise TypeError(
-                    "an async engine needs a synchronous driver for the checks: "
-                    "install psycopg, psycopg2 or pg8000"
-                )
+            _require_postgresql(target.dialect.name)
             with _connect_url(
-                url.set(drivername=f"postgresql+{driver}").render_as_string(
-                    hide_password=False
-                )
+                target.url.render_as_string(hide_password=False)
             ) as fetch:
                 yield fetch
             return
@@ -213,6 +236,16 @@ def _connect_url(url: str) -> Iterator[Fetch]:
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://") :]
     scheme = url.split("://", 1)[0] if "://" in url else ""
+    if scheme.partition("+")[2] in _ASYNC_DRIVERS:
+        # an async application URL: the checks need a synchronous driver
+        driver = _sync_driver()
+        if driver is None:
+            raise ConfigError(
+                f"{scheme}:// is an async driver; the checks need a synchronous one: "
+                "install psycopg, psycopg2 or pg8000"
+            )
+        scheme = f"postgresql+{driver}"
+        url = scheme + "://" + url.split("://", 1)[1]
     if "+" in scheme:
         # an explicit SQLAlchemy driver: postgresql+pg8000://...
         with _connect_sqlalchemy(url) as fetch:
