@@ -54,6 +54,10 @@ def run_with(fetch: Fetch, settings: Settings) -> Report:
             if int(version["version_num"]) >= 150000
             else "false"
         ),
+        # NOT ENFORCED foreign keys (PostgreSQL 18+) check nothing
+        "{constraint_enforced}": (
+            "c.conenforced" if int(version["version_num"]) >= 180000 else "true"
+        ),
     }
     report = Report(
         server_version=str(version["version"]).split(" ", 1)[0],

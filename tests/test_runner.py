@@ -13,12 +13,12 @@ def test_clean_database():
     assert report.ok
     assert report.server_version == "18.1"
     assert (
-        report.summary() == "PostgreSQL 18.1, all user schemas: 13 checks, 0 problems"
+        report.summary() == "PostgreSQL 18.1, all user schemas: 16 checks, 0 problems"
     )
     # the version, the framework marker tables, the savepoint probe, then one query per check, each on
     # its own cursor
-    assert len(connection.queries) == 16
-    assert connection.closed_cursors == 16
+    assert len(connection.queries) == 19
+    assert connection.closed_cursors == 19
 
 
 def test_findings_and_ignores():
@@ -50,6 +50,7 @@ def test_placeholders_are_filled():
     assert "nsp.nspname in ('public', 'o''brien')" in joined
     assert "<= 7.5000" in joined
     assert "pi.indnullsnotdistinct" in joined
+    assert "c.conenforced and" in joined
 
 
 def test_nulls_not_distinct_needs_postgresql_15():
@@ -58,6 +59,7 @@ def test_nulls_not_distinct_needs_postgresql_15():
     joined = "\n".join(connection.queries)
     assert "indnullsnotdistinct" not in joined
     assert "not false and" in joined
+    assert "conenforced" not in joined
 
 
 def test_default_schema_filter_skips_system_schemas():

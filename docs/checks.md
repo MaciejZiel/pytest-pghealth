@@ -164,6 +164,33 @@ many NULLs is usually intended), indexes created with `NULLS NOT DISTINCT`
 **Fix:** `ALTER TABLE <table> ALTER COLUMN <column> SET NOT NULL;`, or on
 PostgreSQL 15+ recreate the constraint with `UNIQUE NULLS NOT DISTINCT`.
 
+## nullable_foreign_key_column
+
+**Finds** foreign keys with two or more nullable columns and the default
+match type, `MATCH SIMPLE`. A partitioned table's foreign key is reported
+once, on the partitioned table.
+
+**Why.** Under `MATCH SIMPLE` a row with NULL in *any* of the foreign key's
+columns is not checked at all. With `FOREIGN KEY (tenant_id, account_id)`
+and both columns nullable, the row `(42, NULL)` is accepted whether or not
+tenant 42 has any account, and so is `(NULL, 7)`: half a reference that
+points nowhere. `MATCH FULL` accepts NULL only in all of the columns at
+once.
+
+**Skipped:** foreign keys with at most one nullable column. A single-column
+foreign key that is nullable is an optional reference, and so is
+`(tenant_id NOT NULL, account_id NULL)`: NULL there means "no account".
+Also skipped: `MATCH FULL` foreign keys and, on PostgreSQL 18+,
+`NOT ENFORCED` ones. A `CHECK` constraint that makes the columns NULL
+together is not recognised: ignore the finding with that reason.
+
+**Fix:** `ALTER TABLE <table> ALTER COLUMN <column> SET NOT NULL;` for each
+nullable column when every row has a reference. When a row may have none:
+if every column of the key is nullable, drop the foreign key and add it
+again with `MATCH FULL`; otherwise (`MATCH FULL` would then forbid NULL)
+add `CHECK (num_nulls(<nullable columns>) in (0, <their count>))`, which
+the fix spells out.
+
 ## not_valid_constraint
 
 **Finds** `CHECK` and foreign key constraints added with `NOT VALID` and
@@ -199,6 +226,42 @@ finding with that reason.
 
 **Fix:** `ALTER TABLE <table> ALTER COLUMN <column> TYPE jsonb USING <column>::jsonb;`
 (rewrites the table under an exclusive lock).
+
+## char_column
+
+**Finds** columns of type `char(n)` (`character(n)`, `bpchar(n)`), in
+tables and partitioned tables (a partition's column is reported once, on
+the parent). `bpchar` without a length, `varchar` and the one-byte internal
+type `"char"` are not reported, nor are arrays of `char(n)` and domains
+over it.
+
+**Why.** `char(n)` pads every value with spaces to `n` characters.
+Comparisons between `char` values ignore the padding, a cast to `text` or
+`varchar` drops it, and other operations keep it, so trailing spaces matter
+in some expressions and not in others. The padding saves no space and no
+time. It is on PostgreSQL's
+["Don't Do This"](https://wiki.postgresql.org/wiki/Don't_Do_This) list, and
+squawk's `ban-char-field` rule flags it in migrations.
+
+**Fix:** `ALTER TABLE <table> ALTER COLUMN <column> TYPE varchar(<n>);`
+keeps the length limit and drops the padding from the stored values
+(rewrites the table); `TYPE text` if the limit does not matter. Change a
+column and the columns a foreign key links it to in the same migration, or
+`foreign_key_type_mismatch` reports the pair.
+
+## money_column
+
+**Finds** columns of type `money`, in tables and partitioned tables.
+
+**Why.** `money` stores no currency, and its number of fractional digits,
+its input and its text form follow the server's `lc_monetary` setting: a
+dump restored on a server with another `lc_monetary` reads the values
+differently, and fractions of a cent are rounded away. It is on PostgreSQL's
+["Don't Do This"](https://wiki.postgresql.org/wiki/Don't_Do_This) list.
+
+**Fix:** `ALTER TABLE <table> ALTER COLUMN <column> TYPE numeric USING <column>::numeric;`
+(rewrites the table), with a precision and scale if you want one and the
+currency in a column of its own if there can be more than one.
 
 ## unlogged_table
 
@@ -250,7 +313,7 @@ A multi-column or constraint index is kept: the fix only adds the GIN index.
 
 ## Origin of the queries
 
-Twelve queries are ported from
+Fifteen queries are ported from
 [pg-index-health-sql](https://github.com/mfvanek/pg-index-health-sql)
 (Apache-2.0); each file's header names the original and lists the changes.
 `overlapping_index`, `int4_primary_key` and `nullable_unique_column` were

@@ -93,7 +93,7 @@ def test_plugin_session_check_with_url(project, schema):
     result.stdout.fnmatch_lines(
         [
             "*= pghealth =*",
-            "PostgreSQL *: 13 checks, 1 problem (url)",
+            "PostgreSQL *: 16 checks, 1 problem (url)",
             f"foreign_key_without_index: {schema.name}.child.child_parent_id_fkey",
             (f"  fix: CREATE INDEX CONCURRENTLY ON {schema.name}.child (parent_id);"),
         ]

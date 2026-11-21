@@ -6,7 +6,12 @@ import pytest
 from pytest_pghealth.checks import CHECKS
 
 SQL_DIR = resources.files("pytest_pghealth").joinpath("sql")
-PLACEHOLDERS = {"{schema_filter}", "{remaining_percent}", "{nulls_not_distinct}"}
+PLACEHOLDERS = {
+    "{schema_filter}",
+    "{remaining_percent}",
+    "{nulls_not_distinct}",
+    "{constraint_enforced}",
+}
 
 
 def test_every_check_has_one_sql_file_and_back():
@@ -369,3 +374,72 @@ def test_timestamp_without_time_zone_fix(is_timetz, precision, first_line):
         type_precision=precision,
     )
     assert finding.fix.splitlines()[0] == first_line
+
+
+def test_nullable_foreign_key_column_fix():
+    row = {
+        "schema_name": "public",
+        "table_name": "orders",
+        "table_ident": "public.orders",
+        "constraint_name": "orders_customer_fkey",
+        "referenced_table": "customers",
+        "nullable_columns": ["region", "Customer"],
+        "nullable_column_idents": ["region", '"Customer"'],
+    }
+    finding = build(
+        "nullable_foreign_key_column",
+        columns=["tenant_id", "region", "Customer"],
+        **row,
+    )
+    assert finding.target == "public.orders.orders_customer_fkey"
+    assert "(tenant_id, region, Customer)" in finding.message
+    assert "nullable column(s) region, Customer" in finding.message
+    assert "customers" in finding.message
+    assert finding.fix.splitlines() == [
+        "ALTER TABLE public.orders ALTER COLUMN region SET NOT NULL;",
+        'ALTER TABLE public.orders ALTER COLUMN "Customer" SET NOT NULL;',
+        # tenant_id is NOT NULL: MATCH FULL would make the reference required
+        (
+            "-- or, if a row may have no reference, add"
+            ' CHECK (num_nulls(region, "Customer") in (0, 2)) so that they are NULL together'
+        ),
+    ]
+    all_nullable = build(
+        "nullable_foreign_key_column", columns=["region", "Customer"], **row
+    )
+    assert all_nullable.fix.splitlines()[-1] == (
+        "-- or, if a row may have no reference, recreate the foreign key with MATCH FULL"
+    )
+
+
+def test_char_column_fix():
+    finding = build(
+        "char_column",
+        schema_name="public",
+        table_name="countries",
+        table_ident="public.countries",
+        column_name="Code",
+        column_ident='"Code"',
+        column_type="character(2)",
+        type_length=2,
+    )
+    assert finding.target == "public.countries.Code"
+    assert "character(2)" in finding.message
+    assert finding.fix.splitlines()[0] == (
+        'ALTER TABLE public.countries ALTER COLUMN "Code" TYPE varchar(2);'
+    )
+
+
+def test_money_column_fix():
+    finding = build(
+        "money_column",
+        schema_name="billing",
+        table_name="invoices",
+        table_ident="billing.invoices",
+        column_name="total",
+        column_ident="total",
+    )
+    assert finding.target == "billing.invoices.total"
+    assert finding.fix.splitlines()[0] == (
+        "ALTER TABLE billing.invoices ALTER COLUMN total TYPE numeric USING total::numeric;"
+    )

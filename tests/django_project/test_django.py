@@ -94,7 +94,7 @@ def test_session_check_uses_the_django_test_database(project):
     result.stdout.fnmatch_lines(
         [
             "*= pghealth =*",
-            "PostgreSQL *: 13 checks, 1 problem, * ignored (Django database 'default')",
+            "PostgreSQL *: 16 checks, 1 problem, * ignored (Django database 'default')",
             "foreign_key_without_index: public.shop_order.shop_order_customer_id_*",
             ("  fix: CREATE INDEX CONCURRENTLY ON public.shop_order (customer_id);"),
         ]

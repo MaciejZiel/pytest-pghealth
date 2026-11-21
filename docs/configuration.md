@@ -27,7 +27,8 @@ usage error.
 
 ## Which checks run
 
-Every check runs except `btree_index_on_array`. `enable` adds checks,
+Every check runs except `timestamp_without_time_zone` and
+`btree_index_on_array`, which are off by default. `enable` adds checks,
 `disable` removes them, and a check named in both does not run. `"all"`
 applies first: `disable = ["all"]` with `enable = ["invalid_index"]` runs
 only `invalid_index`.
