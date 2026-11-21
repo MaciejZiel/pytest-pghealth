@@ -4,13 +4,17 @@
 -- Copyright (c) 2019-2026. Ivan Vakhrushev and others.
 -- Licensed under the Apache License 2.0 (LICENSES/Apache-2.0.txt).
 -- Modified for pytest-pghealth: several schemas, quoted identifiers,
--- extension tables skipped, the schema and table as separate columns, and
--- the nullable columns listed apart from all the foreign key's columns.
+-- extension tables skipped, the schema and table as separate columns, the
+-- nullable columns listed apart from all the foreign key's columns, only
+-- keys with two or more nullable columns, and NOT ENFORCED keys skipped.
 
--- Multi-column foreign keys with a nullable column and the default MATCH
--- SIMPLE. A row with NULL in any one of the columns is not checked at all,
--- so (tenant_id, customer_id) = (1, NULL) or (NULL, 7) passes whatever the
--- other column holds. MATCH FULL allows NULL only in all of them.
+-- Multi-column foreign keys with two or more nullable columns and the
+-- default MATCH SIMPLE. A row with NULL in any one of the columns is not
+-- checked at all, so with (tenant_id, region_id, customer_id) the row
+-- (1, 2, NULL) passes whatever tenant 1 and region 2 hold. With a single
+-- nullable column, NULL there is the usual "no reference" of an optional
+-- foreign key scoped by NOT NULL columns, and is not reported. MATCH FULL
+-- allows NULL only in all of the columns.
 select
     nsp.nspname::text as schema_name,
     tbl.relname::text as table_name,
@@ -30,6 +34,7 @@ where
     c.contype = 'f' and
     cardinality(c.conkey) > 1 and
     c.confmatchtype <> 'f' and /* not MATCH FULL */
+    {constraint_enforced} and
     c.conparentid = 0 and c.coninhcount = 0 and /* not a constraint inherited by a partition */
     {schema_filter} and
     not exists (
@@ -37,5 +42,5 @@ where
         where d.classid = 'pg_catalog.pg_class'::regclass and d.objid = tbl.oid and d.deptype = 'e'
     )
 group by nsp.nspname, tbl.relname, c.conname, c.confrelid, c.oid
-having bool_or(not col.attnotnull)
+having count(*) filter (where not col.attnotnull) > 1
 order by schema_name, table_name, constraint_name;

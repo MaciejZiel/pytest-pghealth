@@ -10,9 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Three checks ported from pg-index-health-sql, on by default:
-  `nullable_foreign_key_column` (multi-column foreign keys with a nullable
-  column under the default `MATCH SIMPLE`, which skips the check of a row
-  with NULL in any of them), `char_column` (`char(n)`, padded with spaces)
+  `nullable_foreign_key_column` (foreign keys with two or more nullable
+  columns under the default `MATCH SIMPLE`, which skips the check of a row
+  with NULL in any of them; `NOT ENFORCED` keys are skipped), `char_column` (`char(n)`, padded with spaces)
   and `money_column` (`money` instead of `numeric`).
 
 ### Changed

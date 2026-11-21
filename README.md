@@ -172,7 +172,7 @@ error. Details, the privileges it needs, and a GitHub Actions example:
 | `sequence_near_overflow` | sequences with 20% or less of their range left (useful on a restored production snapshot) | widen the column and sequence |
 | `foreign_key_type_mismatch` | foreign key columns whose type or length differs from the referenced column | `ALTER COLUMN ... TYPE` |
 | `nullable_unique_column` | multi-column unique indexes and constraints with a nullable column (not `NULLS NOT DISTINCT`) | `SET NOT NULL` or `NULLS NOT DISTINCT` |
-| `nullable_foreign_key_column` | multi-column foreign keys with a nullable column, which the default `MATCH SIMPLE` does not check when one of them is NULL | `SET NOT NULL` or `MATCH FULL` |
+| `nullable_foreign_key_column` | foreign keys with two or more nullable columns, which the default `MATCH SIMPLE` does not check when one of them is NULL | `SET NOT NULL`, `MATCH FULL` or a `CHECK` |
 | `not_valid_constraint` | `CHECK` and foreign key constraints added `NOT VALID` and never validated | `VALIDATE CONSTRAINT` |
 | `duplicate_foreign_key` | foreign keys identical to another one | `DROP CONSTRAINT` |
 | `json_column` | `json` columns, which cannot be compared, made unique or GIN-indexed | `ALTER COLUMN ... TYPE jsonb` |

@@ -263,10 +263,19 @@ def _nullable_unique_column(row: Row) -> Finding:
 def _nullable_foreign_key_column(row: Row) -> Finding:
     columns = list(row["columns"])
     nullable = list(row["nullable_columns"])
+    idents = list(row["nullable_column_idents"])
     set_not_null = "\n".join(
         f"ALTER TABLE {row['table_ident']} ALTER COLUMN {ident} SET NOT NULL;"
-        for ident in row["nullable_column_idents"]
+        for ident in idents
     )
+    if len(nullable) == len(columns):
+        optional = "recreate the foreign key with MATCH FULL"
+    else:
+        # MATCH FULL would forbid NULL: some of the columns are NOT NULL
+        optional = (
+            f"add CHECK (num_nulls({_columns(idents)}) in (0, {len(idents)})) "
+            "so that they are NULL together"
+        )
     return Finding(
         check="nullable_foreign_key_column",
         schema=row["schema_name"],
@@ -278,11 +287,7 @@ def _nullable_foreign_key_column(row: Row) -> Finding:
             "SIMPLE, a row with NULL in any of its columns is not checked, so "
             f"the others can hold values that {row['referenced_table']} does not have."
         ),
-        fix=(
-            set_not_null
-            + "\n-- or, if a row may leave all of them NULL, recreate the foreign key"
-            " with MATCH FULL"
-        ),
+        fix=(set_not_null + f"\n-- or, if a row may have no reference, {optional}"),
     )
 
 
@@ -400,7 +405,8 @@ def _char_column(row: Row) -> Finding:
             f"ALTER TABLE {row['table_ident']} ALTER COLUMN {row['column_ident']} "
             f"TYPE varchar({length});\n"
             "-- drops the padding and rewrites the table; TYPE text if the length "
-            "limit does not matter"
+            "limit does not matter;\n"
+            "-- change a column linked to it by a foreign key in the same migration"
         ),
     )
 
@@ -517,7 +523,7 @@ CHECKS: dict[str, Check] = {
         ),
         Check(
             "nullable_foreign_key_column",
-            "multi-column foreign keys with a nullable column (MATCH SIMPLE)",
+            "foreign keys with two or more nullable columns (MATCH SIMPLE)",
             _nullable_foreign_key_column,
         ),
         Check(

@@ -6,7 +6,12 @@ import pytest
 from pytest_pghealth.checks import CHECKS
 
 SQL_DIR = resources.files("pytest_pghealth").joinpath("sql")
-PLACEHOLDERS = {"{schema_filter}", "{remaining_percent}", "{nulls_not_distinct}"}
+PLACEHOLDERS = {
+    "{schema_filter}",
+    "{remaining_percent}",
+    "{nulls_not_distinct}",
+    "{constraint_enforced}",
+}
 
 
 def test_every_check_has_one_sql_file_and_back():
@@ -372,28 +377,39 @@ def test_timestamp_without_time_zone_fix(is_timetz, precision, first_line):
 
 
 def test_nullable_foreign_key_column_fix():
+    row = {
+        "schema_name": "public",
+        "table_name": "orders",
+        "table_ident": "public.orders",
+        "constraint_name": "orders_customer_fkey",
+        "referenced_table": "customers",
+        "nullable_columns": ["region", "Customer"],
+        "nullable_column_idents": ["region", '"Customer"'],
+    }
     finding = build(
         "nullable_foreign_key_column",
-        schema_name="public",
-        table_name="orders",
-        table_ident="public.orders",
-        constraint_name="orders_customer_fkey",
-        referenced_table="customers",
-        columns=["tenant_id", "Customer"],
-        nullable_columns=["Customer"],
-        nullable_column_idents=['"Customer"'],
+        columns=["tenant_id", "region", "Customer"],
+        **row,
     )
     assert finding.target == "public.orders.orders_customer_fkey"
-    assert "(tenant_id, Customer)" in finding.message
-    assert "nullable column(s) Customer" in finding.message
+    assert "(tenant_id, region, Customer)" in finding.message
+    assert "nullable column(s) region, Customer" in finding.message
     assert "customers" in finding.message
     assert finding.fix.splitlines() == [
+        "ALTER TABLE public.orders ALTER COLUMN region SET NOT NULL;",
         'ALTER TABLE public.orders ALTER COLUMN "Customer" SET NOT NULL;',
+        # tenant_id is NOT NULL: MATCH FULL would make the reference required
         (
-            "-- or, if a row may leave all of them NULL, recreate the foreign key"
-            " with MATCH FULL"
+            "-- or, if a row may have no reference, add"
+            ' CHECK (num_nulls(region, "Customer") in (0, 2)) so that they are NULL together'
         ),
     ]
+    all_nullable = build(
+        "nullable_foreign_key_column", columns=["region", "Customer"], **row
+    )
+    assert all_nullable.fix.splitlines()[-1] == (
+        "-- or, if a row may have no reference, recreate the foreign key with MATCH FULL"
+    )
 
 
 def test_char_column_fix():

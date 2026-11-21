@@ -50,6 +50,7 @@ def test_placeholders_are_filled():
     assert "nsp.nspname in ('public', 'o''brien')" in joined
     assert "<= 7.5000" in joined
     assert "pi.indnullsnotdistinct" in joined
+    assert "c.conenforced and" in joined
 
 
 def test_nulls_not_distinct_needs_postgresql_15():
@@ -58,6 +59,7 @@ def test_nulls_not_distinct_needs_postgresql_15():
     joined = "\n".join(connection.queries)
     assert "indnullsnotdistinct" not in joined
     assert "not false and" in joined
+    assert "conenforced" not in joined
 
 
 def test_default_schema_filter_skips_system_schemas():
