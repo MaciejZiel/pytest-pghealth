@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Three checks ported from pg-index-health-sql, on by default:
+  `nullable_foreign_key_column` (multi-column foreign keys with a nullable
+  column under the default `MATCH SIMPLE`, which skips the check of a row
+  with NULL in any of them), `char_column` (`char(n)`, padded with spaces)
+  and `money_column` (`money` instead of `numeric`).
+
+### Changed
+
+- Sixteen checks run by default (thirteen before).
+
+### Fixed
+
+- The configuration docs said every check but `btree_index_on_array` runs
+  by default; `timestamp_without_time_zone` is off by default too.
+
 ## [0.3.0] - 2026-11-15
 
 ### Added

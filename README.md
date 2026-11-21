@@ -9,9 +9,9 @@ that test database and fails the run when it finds a structural problem:
 - tables without a primary key,
 - `integer` primary keys and sequences that will run out,
 - foreign keys whose column type differs from the column they reference,
-- multi-column unique constraints that NULLs slip through,
+- multi-column unique constraints and foreign keys that NULLs slip through,
 - constraints added `NOT VALID` and never validated,
-- `json` columns that should be `jsonb`, and unlogged tables.
+- `json`, `char(n)` and `money` columns, and unlogged tables.
 
 Every finding names the table and the object, says why it matters, and gives
 the SQL that fixes it. No extension to install, no production statistics, no
@@ -21,7 +21,7 @@ staging or a production snapshot with the read-only `pghealth` command.
 
 ```text
 =================================== pghealth ===================================
-PostgreSQL 18.1, all user schemas: 13 checks, 3 problems (fixture engine)
+PostgreSQL 18.1, all user schemas: 16 checks, 3 problems (fixture engine)
 
 foreign_key_without_index: public.order_items.order_items_order_id_fkey
   Foreign key order_items_order_id_fkey (order_id) has no index: every delete or key update in orders scans public.order_items, and joins on these columns cannot use an index.
@@ -172,9 +172,12 @@ error. Details, the privileges it needs, and a GitHub Actions example:
 | `sequence_near_overflow` | sequences with 20% or less of their range left (useful on a restored production snapshot) | widen the column and sequence |
 | `foreign_key_type_mismatch` | foreign key columns whose type or length differs from the referenced column | `ALTER COLUMN ... TYPE` |
 | `nullable_unique_column` | multi-column unique indexes and constraints with a nullable column (not `NULLS NOT DISTINCT`) | `SET NOT NULL` or `NULLS NOT DISTINCT` |
+| `nullable_foreign_key_column` | multi-column foreign keys with a nullable column, which the default `MATCH SIMPLE` does not check when one of them is NULL | `SET NOT NULL` or `MATCH FULL` |
 | `not_valid_constraint` | `CHECK` and foreign key constraints added `NOT VALID` and never validated | `VALIDATE CONSTRAINT` |
 | `duplicate_foreign_key` | foreign keys identical to another one | `DROP CONSTRAINT` |
 | `json_column` | `json` columns, which cannot be compared, made unique or GIN-indexed | `ALTER COLUMN ... TYPE jsonb` |
+| `char_column` | `char(n)` columns, padded with spaces that comparisons ignore and casts drop | `ALTER COLUMN ... TYPE varchar(n)` |
+| `money_column` | `money` columns, whose scale and text form follow the server's `lc_monetary` | `ALTER COLUMN ... TYPE numeric` |
 | `unlogged_table` | unlogged tables: emptied by a crash, never on a standby | `SET LOGGED` |
 | `timestamp_without_time_zone` (off by default) | `timestamp` without time zone and `timetz` columns | `ALTER COLUMN ... TYPE timestamptz` |
 | `btree_index_on_array` (off by default) | B-tree indexes on array columns, which cannot serve `@>`, `<@` or `&&` | a GIN index |
@@ -198,7 +201,7 @@ same column, which `overlapping_index` reports and names the foreign key
 
 ## On real projects
 
-The checks ran against the migrated schemas of four open-source projects;
+The checks of 0.3.0 ran against the migrated schemas of four open-source projects;
 every finding was read and classified ([details](docs/real-projects.md)):
 
 | Project | Findings | True | Debatable | False positive | Skipped (framework-owned) |
@@ -255,12 +258,16 @@ its `format` key is versioned.
 | Output | findings with fix SQL: text, JSON, GitHub annotations | Java objects for assertions; a generator of foreign key index migrations | SARIF | rule violations with advice |
 | Production statistics (bloat, unused indexes) | no, by design | yes | n/a | no |
 
-pg-index-health is the mature tool for this on the JVM, and twelve of the
+pg-index-health is the mature tool for this on the JVM, and fifteen of the
 queries here are ported from its SQL (see [Credits](#credits)). squawk lints
 the migration *statements* (locks, unsafe `ALTER`s) and complements this:
 squawk asks "is this migration safe to run?", pytest-pghealth asks "is the
 schema it produces sound?". Production-only checks (bloat, unused indexes)
 are left out on purpose: on a test database their numbers mean nothing.
+[PgHero](https://github.com/ankane/pghero) is a dashboard for a running
+database (slow queries, bloat, unused and duplicate indexes, sequences);
+it watches production, while pytest-pghealth stops a schema problem at the
+pull request that introduces it.
 
 ## Pairs with pytest-queryguard
 
@@ -291,9 +298,10 @@ foreign keys whatever the tests ran.
 
 The SQL of `foreign_key_without_index`, `duplicate_index`, `invalid_index`,
 `table_without_primary_key`, `sequence_near_overflow`,
-`foreign_key_type_mismatch`, `not_valid_constraint`, `duplicate_foreign_key`,
-`json_column`, `unlogged_table`, `timestamp_without_time_zone` and
-`btree_index_on_array` is ported from
+`foreign_key_type_mismatch`, `nullable_foreign_key_column`,
+`not_valid_constraint`, `duplicate_foreign_key`, `json_column`,
+`char_column`, `money_column`, `unlogged_table`,
+`timestamp_without_time_zone` and `btree_index_on_array` is ported from
 [pg-index-health-sql](https://github.com/mfvanek/pg-index-health-sql) by
 Ivan Vakhrushev and others, under the Apache License 2.0. Each ported file
 keeps its copyright line and says what was changed; see [NOTICE](NOTICE) and
