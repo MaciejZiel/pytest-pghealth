@@ -40,7 +40,7 @@ def test_healthy_database(database, capsys):
     assert database["dsn"] == "postgresql://staging/app"
     out = capsys.readouterr().out
     assert out.startswith(
-        "pghealth: PostgreSQL 18.1, all user schemas: 13 checks, 0 problems"
+        "pghealth: PostgreSQL 18.1, all user schemas: 16 checks, 0 problems"
     )
 
 
@@ -173,7 +173,7 @@ def test_pyproject_ignores_and_options(database, capsys, tmp_path):
         == 0
     )
     out = capsys.readouterr().out
-    assert "public: 12 checks, 0 problems, 1 ignored" in out
+    assert "public: 15 checks, 0 problems, 1 ignored" in out
     assert not any("-- pghealth: invalid_index" in q for q in connection.queries)
     # --no-config: the ignore is gone
     assert cli.main(["postgresql://x/y", "--no-config"]) == 1

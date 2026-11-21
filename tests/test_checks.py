@@ -369,3 +369,61 @@ def test_timestamp_without_time_zone_fix(is_timetz, precision, first_line):
         type_precision=precision,
     )
     assert finding.fix.splitlines()[0] == first_line
+
+
+def test_nullable_foreign_key_column_fix():
+    finding = build(
+        "nullable_foreign_key_column",
+        schema_name="public",
+        table_name="orders",
+        table_ident="public.orders",
+        constraint_name="orders_customer_fkey",
+        referenced_table="customers",
+        columns=["tenant_id", "Customer"],
+        nullable_columns=["Customer"],
+        nullable_column_idents=['"Customer"'],
+    )
+    assert finding.target == "public.orders.orders_customer_fkey"
+    assert "(tenant_id, Customer)" in finding.message
+    assert "nullable column(s) Customer" in finding.message
+    assert "customers" in finding.message
+    assert finding.fix.splitlines() == [
+        'ALTER TABLE public.orders ALTER COLUMN "Customer" SET NOT NULL;',
+        (
+            "-- or, if a row may leave all of them NULL, recreate the foreign key"
+            " with MATCH FULL"
+        ),
+    ]
+
+
+def test_char_column_fix():
+    finding = build(
+        "char_column",
+        schema_name="public",
+        table_name="countries",
+        table_ident="public.countries",
+        column_name="Code",
+        column_ident='"Code"',
+        column_type="character(2)",
+        type_length=2,
+    )
+    assert finding.target == "public.countries.Code"
+    assert "character(2)" in finding.message
+    assert finding.fix.splitlines()[0] == (
+        'ALTER TABLE public.countries ALTER COLUMN "Code" TYPE varchar(2);'
+    )
+
+
+def test_money_column_fix():
+    finding = build(
+        "money_column",
+        schema_name="billing",
+        table_name="invoices",
+        table_ident="billing.invoices",
+        column_name="total",
+        column_ident="total",
+    )
+    assert finding.target == "billing.invoices.total"
+    assert finding.fix.splitlines()[0] == (
+        "ALTER TABLE billing.invoices ALTER COLUMN total TYPE numeric USING total::numeric;"
+    )

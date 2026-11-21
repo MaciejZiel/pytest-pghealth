@@ -467,6 +467,74 @@ def test_timestamp_without_time_zone(schema):
     assert not CHECKS["timestamp_without_time_zone"].default
 
 
+def test_nullable_foreign_key_column(schema):
+    schema.sql(
+        "create table acct (tenant_id int, id int, primary key (tenant_id, id))",
+        "create table inv (id int primary key, tenant_id int not null, acct_id int,"
+        " constraint inv_acct foreign key (tenant_id, acct_id) references acct)",
+        # MATCH FULL, NOT NULL columns and single-column keys are fine
+        "create table full_ (id int primary key, tenant_id int, acct_id int,"
+        " constraint full_acct foreign key (tenant_id, acct_id) references acct match full)",
+        "create table nn (id int primary key, tenant_id int not null, acct_id int not null,"
+        " constraint nn_acct foreign key (tenant_id, acct_id) references acct)",
+        "create table one (id int primary key, inv_id int references inv)",
+        # on a partitioned table: reported once, on the parent
+        "create table pinv (id int, tenant_id int, acct_id int, d date not null,"
+        " constraint pinv_acct foreign key (tenant_id, acct_id) references acct)"
+        " partition by range (d)",
+        "create table pinv_2026 partition of pinv"
+        " for values from ('2026-01-01') to ('2027-01-01')",
+    )
+    # the problem: a row with a NULL in one column escapes the foreign key
+    schema.sql(
+        "insert into inv values (1, 42, null)",
+        "delete from inv",
+    )
+    assert schema.targets("nullable_foreign_key_column") == [
+        "inv.inv_acct",
+        "pinv.pinv_acct",
+    ]
+    finding = next(
+        f for f in schema.check("nullable_foreign_key_column") if f.table == "inv"
+    )
+    assert "nullable column(s) acct_id:" in finding.message
+    schema.apply_all("nullable_foreign_key_column")
+    with pytest.raises(DBAPIError):
+        schema.sql("insert into inv values (1, 42, null)")
+
+
+def test_char_column(schema):
+    schema.sql(
+        "create table cc (id int primary key, a char(2), b character(3) not null,"
+        ' c bpchar, d varchar(2), e text, f "char")',
+        "insert into cc values (1, 'x', 'y ', 'z', 'w', 'v', 'u')",
+        "create table cp (id int, code char(4)) partition by range (id)",
+        "create table cp_1 partition of cp for values from (0) to (10)",
+    )
+    # bpchar without a length, varchar, text and the one-byte "char" are fine
+    assert schema.targets("char_column") == ["cc.a", "cc.b", "cp.code"]
+    finding = next(f for f in schema.check("char_column") if f.object == "b")
+    assert "character(3)" in finding.message
+    assert finding.fix.startswith(
+        f"ALTER TABLE {schema.name}.cc ALTER COLUMN b TYPE varchar(3);"
+    )
+    schema.apply_all("char_column")
+    # the padding is gone, the length limit stays
+    assert schema.sql("select a, b from cc") == [("x", "y")]
+    with pytest.raises(DBAPIError):
+        schema.sql("update cc set b = 'four'")
+
+
+def test_money_column(schema):
+    schema.sql(
+        "create table mc (id int primary key, total money, net numeric(12, 2))",
+        "insert into mc values (1, '12.34', 10)",
+    )
+    assert schema.targets("money_column") == ["mc.total"]
+    schema.apply_all("money_column")
+    assert str(schema.sql("select total from mc")[0][0]) == "12.34"
+
+
 def test_framework_tables_are_skipped_but_not_their_state(schema):
     schema.sql(
         # Django's tables are recognised next to django_migrations

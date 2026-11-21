@@ -13,12 +13,12 @@ def test_clean_database():
     assert report.ok
     assert report.server_version == "18.1"
     assert (
-        report.summary() == "PostgreSQL 18.1, all user schemas: 13 checks, 0 problems"
+        report.summary() == "PostgreSQL 18.1, all user schemas: 16 checks, 0 problems"
     )
     # the version, the framework marker tables, the savepoint probe, then one query per check, each on
     # its own cursor
-    assert len(connection.queries) == 16
-    assert connection.closed_cursors == 16
+    assert len(connection.queries) == 19
+    assert connection.closed_cursors == 19
 
 
 def test_findings_and_ignores():

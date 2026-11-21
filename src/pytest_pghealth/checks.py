@@ -260,6 +260,32 @@ def _nullable_unique_column(row: Row) -> Finding:
     )
 
 
+def _nullable_foreign_key_column(row: Row) -> Finding:
+    columns = list(row["columns"])
+    nullable = list(row["nullable_columns"])
+    set_not_null = "\n".join(
+        f"ALTER TABLE {row['table_ident']} ALTER COLUMN {ident} SET NOT NULL;"
+        for ident in row["nullable_column_idents"]
+    )
+    return Finding(
+        check="nullable_foreign_key_column",
+        schema=row["schema_name"],
+        table=row["table_name"],
+        object=row["constraint_name"],
+        message=(
+            f"Foreign key {row['constraint_name']} ({_columns(columns)}) has "
+            f"nullable column(s) {_columns(nullable)}: with the default MATCH "
+            "SIMPLE, a row with NULL in any of its columns is not checked, so "
+            f"the others can hold values that {row['referenced_table']} does not have."
+        ),
+        fix=(
+            set_not_null
+            + "\n-- or, if a row may leave all of them NULL, recreate the foreign key"
+            " with MATCH FULL"
+        ),
+    )
+
+
 def _not_valid_constraint(row: Row) -> Finding:
     kind = "Foreign key" if row["constraint_type"] == "f" else "Check constraint"
     return Finding(
@@ -357,6 +383,49 @@ def _unlogged_table(row: Row) -> Finding:
     )
 
 
+def _char_column(row: Row) -> Finding:
+    length = int(row["type_length"])
+    return Finding(
+        check="char_column",
+        schema=row["schema_name"],
+        table=row["table_name"],
+        object=row["column_name"],
+        message=(
+            f"Column {row['table_ident']}.{row['column_ident']} is "
+            f"{row['column_type']}: values are padded with spaces to {length} "
+            "characters, comparisons ignore the padding and a cast to text drops "
+            "it, so trailing spaces count in some expressions and not in others."
+        ),
+        fix=(
+            f"ALTER TABLE {row['table_ident']} ALTER COLUMN {row['column_ident']} "
+            f"TYPE varchar({length});\n"
+            "-- drops the padding and rewrites the table; TYPE text if the length "
+            "limit does not matter"
+        ),
+    )
+
+
+def _money_column(row: Row) -> Finding:
+    return Finding(
+        check="money_column",
+        schema=row["schema_name"],
+        table=row["table_name"],
+        object=row["column_name"],
+        message=(
+            f"Column {row['table_ident']}.{row['column_ident']} is money: its "
+            "fractional digits and text form follow the server's lc_monetary "
+            "setting, it stores no currency, and a dump restored on a server "
+            "with another lc_monetary reads the values differently."
+        ),
+        fix=(
+            f"ALTER TABLE {row['table_ident']} ALTER COLUMN {row['column_ident']} "
+            f"TYPE numeric USING {row['column_ident']}::numeric;\n"
+            "-- rewrites the table; give it a scale (numeric(19, 4)) if you want "
+            "one, and keep the currency in a column of its own"
+        ),
+    )
+
+
 def _timestamp_without_time_zone(row: Row) -> Finding:
     column = f"{row['table_ident']}.{row['column_ident']}"
     precision = int(row["type_precision"])
@@ -447,6 +516,11 @@ CHECKS: dict[str, Check] = {
             ported=False,
         ),
         Check(
+            "nullable_foreign_key_column",
+            "multi-column foreign keys with a nullable column (MATCH SIMPLE)",
+            _nullable_foreign_key_column,
+        ),
+        Check(
             "not_valid_constraint",
             "constraints added NOT VALID and never validated",
             _not_valid_constraint,
@@ -465,6 +539,16 @@ CHECKS: dict[str, Check] = {
             "unlogged_table",
             "unlogged tables, emptied by a crash and not replicated",
             _unlogged_table,
+        ),
+        Check(
+            "char_column",
+            "char(n) columns, padded with spaces",
+            _char_column,
+        ),
+        Check(
+            "money_column",
+            "columns of type money instead of numeric",
+            _money_column,
         ),
         Check(
             "timestamp_without_time_zone",
